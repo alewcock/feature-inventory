@@ -1,15 +1,17 @@
 ---
 allowed-tools: Bash, Read, Glob, Grep
 description: >
-  Check the current status of a feature inventory, gap analysis, or plan generation run.
-  Shows plugin version, interview status, which dimensions have been completed, coverage
-  audit results, plan generation progress, and whether indexes have been generated.
-  Useful after a /clear or interruption to see where things stand before resuming.
+  Check the current status of a feature inventory, gap analysis, plan generation, or
+  marketing catalog run. Shows plugin version, interview status, which dimensions have
+  been completed, coverage audit results, plan generation progress, marketing catalog
+  progress, and whether indexes have been generated. Useful after a /clear or
+  interruption to see where things stand before resuming.
 ---
 
 # Feature Inventory Status
 
-Check the progress of the current feature inventory analysis, gap analysis, and plan generation.
+Check the progress of the current feature inventory analysis, gap analysis, plan generation,
+and marketing catalog.
 
 ## Steps
 
@@ -156,4 +158,45 @@ External Reviews: {N}/{total} reviewed
 Plan Index: {generated / not generated}
 
 To resume: run /feature-inventory:plan
+```
+
+14. **Marketing catalog status:** Check if `./docs/marketing/` exists. If so:
+    - `interview.md` exists? Report marketing interview status.
+    - `catalog-config.json` exists? Report audience type, tone, and competitive position.
+    - `catalog-state.json` exists? Report last run date and feature checksums.
+    - Count entry files in `./docs/marketing/entries/`:
+      - Feature entries: count files matching `F-*.md` (excluding `-composite` files)
+      - Composite entries: count files matching `*-composite.md` and `COMPOSITE-*.md`
+      - Archived entries: count files in `./docs/marketing/entries/archived/`
+    - `MARKETING-CATALOG.md` exists? Report.
+    - `MARKETING-CATALOG.json` exists? Report.
+    - Present marketing catalog summary:
+
+```
+Marketing Catalog Status
+=========================
+
+Marketing Interview: {complete / not started}
+Audience: {type — personas / not configured}
+Tone: {tone / not configured}
+Competitive Position: {position / not configured}
+Last Run: {date / never}
+
+Catalog Entries:
+| Feature Area | Entry | Composites | Status |
+|--------------|-------|------------|--------|
+| F-001: User Management | DONE | 1 | Complete |
+| F-002: Billing | DONE | 0 | Complete |
+| F-003: Reporting | PENDING | - | Not Started |
+| ... | ... | ... | ... |
+
+Entries: {done}/{total} feature areas cataloged
+  - Feature entries: {N}
+  - Within-area composites: {N}
+  - Cross-product composites: {N}
+  - Archived: {N}
+
+Master Catalog: {generated / not generated}
+
+To resume: run /feature-inventory:marketing-catalog
 ```

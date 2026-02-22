@@ -68,6 +68,72 @@ navigate to any feature.
 - Original source location
 - Test cases (given/expect)
 
+## plan.json Schema
+
+The analysis plan includes repo configuration, dimension assignments, and metadata
+used by the coverage audit script.
+
+```json
+{
+  "repos": [
+    {
+      "name": "repo-name",
+      "path": "/absolute/path",
+      "languages": ["typescript", "python"],
+      "frameworks": ["express", "react"],
+      "size": "medium",
+      "modules": ["src/auth", "src/billing", "src/core"],
+      "dimensions_to_analyze": [
+        {
+          "dimension": "api-surface",
+          "scope": "full",
+          "split_by_module": false
+        },
+        {
+          "dimension": "ui-screens",
+          "scope": "src/js/remote/pages",
+          "split_by_module": false,
+          "estimated_source_lines": 4200,
+          "files": ["MusicPage.js", "PromotePage.js", "SettingsPage.js"]
+        }
+      ]
+    }
+  ],
+  "exclude_patterns": [
+    "node_modules", "cef_binary", "baseclasses", "FFDShowAPI",
+    "NotifyIconWpf", ".Designer.cs", "Properties/Resources"
+  ],
+  "deduplicate_paths": [
+    "Shared library copies that exist in multiple subprojects — only audit one copy"
+  ],
+  "file_assignments": {
+    "src/js/remote/shared/programs.js": "ui-screens--shared",
+    "src/js/remote/shared/content_button_group.js": "ui-screens--shared",
+    "src/js/remote/shared/playlist_items_ui.js": "ui-screens--shared-large"
+  }
+}
+```
+
+### plan.json Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `repos` | Yes | Array of repository configurations |
+| `repos[].name` | Yes | Repository name (used as directory name under `raw/`) |
+| `repos[].path` | Yes | Absolute filesystem path to the repo |
+| `repos[].dimensions_to_analyze` | Yes | Dimensions with scope and splitting config |
+| `exclude_patterns` | No | Patterns for third-party/vendor/generated code to exclude from coverage audit |
+| `deduplicate_paths` | No | Paths duplicated across subprojects (audit only one copy) |
+| `file_assignments` | No | Mapping of every source file >100 lines to its agent task. Gaps here are audit gaps by definition |
+
+The `exclude_patterns` array is consumed by `scripts/coverage-audit.py` to skip files
+the product doesn't own. The orchestrator populates this during Step 2 based on
+discovery of vendor directories, third-party libraries, and auto-generated code.
+
+The `file_assignments` mapping ensures every significant source file is assigned to
+exactly one agent task during planning. Files missing from this mapping will be caught
+by the coverage audit.
+
 ## ID Format
 
 Hierarchical IDs:

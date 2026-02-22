@@ -184,6 +184,30 @@ Based on discovery AND the user interview, create an analysis plan.
 
 Skip dimensions that clearly don't apply.
 
+### Exclude Patterns and Vendor Discovery
+
+During discovery, identify third-party libraries, vendor directories, auto-generated
+code (`.Designer.cs`, generated proxies), and libraries duplicated across subprojects.
+Record these as `exclude_patterns` in `plan.json`. The coverage audit script uses these
+to skip files the product doesn't own.
+
+Also identify paths that are duplicated across subprojects (e.g., shared library copies).
+Record these as `deduplicate_paths` so the audit only checks one copy.
+
+```json
+{
+  "repos": [...],
+  "exclude_patterns": [
+    "node_modules", "cef_binary", "baseclasses", "FFDShowAPI",
+    "NotifyIconWpf", "gong-wpf-dragdrop", ".Designer.cs",
+    "Properties/Resources", "ns-eel2", "Wasabi/"
+  ],
+  "deduplicate_paths": [
+    "Shared library copies that exist in multiple subprojects — only audit one copy"
+  ]
+}
+```
+
 ### Splitting Strategy
 
 Splitting is critical to prevent context exhaustion. A single agent cannot adequately
@@ -222,6 +246,29 @@ Apply these rules:
   "files": ["MusicPage.js", "PromotePage.js", "SettingsPage.js", "..."]
 }
 ```
+
+5. **Enumerate and assign every file.** After splitting by module, verify that every
+   source file >100 lines in the repo is assigned to exactly one agent task. Build
+   a file-to-task mapping and include it in `plan.json`:
+
+   ```json
+   "file_assignments": {
+     "src/js/remote/shared/programs.js": "ui-screens--shared",
+     "src/js/remote/shared/content_button_group.js": "ui-screens--shared",
+     "src/js/remote/shared/playlist_items_ui.js": "ui-screens--shared-large",
+   }
+   ```
+
+   Files not assigned to any task are audit gaps by definition. Catch them during
+   planning, not during the audit.
+
+6. **Shared/cross-cutting directories get their own agent tasks.** Directories like
+   `shared/`, `lib/`, `utils/`, `helpers/`, `common/` contain code used across multiple
+   features but owned by no single page or dimension. These MUST get dedicated agent
+   tasks — they should never be left for a page-level agent to "pick up in passing."
+
+   For example, `src/js/remote/shared/` and `src/js/shared/` each get at least one
+   dedicated `ui-screens` and/or `business-logic` agent task.
 
 Write to `./feature-inventory-output/plan.json`.
 
@@ -296,93 +343,103 @@ until every gap identified here is resolved.
 The raw analysis may have covered some source files thoroughly and others barely at all.
 This step catches the gaps before synthesis, when they're cheapest to fix.
 
-### 3.5a: Build Source File Inventory
+### 3.5a: Run the Coverage Audit Script
 
-For each repo in the plan, enumerate all source files that should have been analyzed:
+Execute the scripted audit:
 
 ```bash
-# Get all source files with line counts, sorted by size descending
-find {repo_path} -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \
-  -o -name "*.py" -o -name "*.rb" -o -name "*.cs" -o -name "*.java" -o -name "*.go" \
-  -o -name "*.vue" -o -name "*.svelte" -o -name "*.php" -o -name "*.razor" \) \
-  ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" \
-  ! -path "*/vendor/*" ! -path "*/__pycache__/*" \
-  | xargs wc -l | sort -rn
+python3 {plugin_path}/scripts/coverage-audit.py \
+  --plan ./feature-inventory-output/plan.json \
+  --raw-dir ./feature-inventory-output/raw \
+  --details-dir ./feature-inventory-output/details \
+  --output ./feature-inventory-output/coverage-audit.json
 ```
 
-### 3.5b: Check Coverage Per File
+The script:
+1. Enumerates ALL source files >100 lines from each repo's filesystem (not from
+   plan.json file lists)
+2. Excludes paths matching `plan.json.exclude_patterns`
+3. For each file, counts references in `raw/` AND `details/` using filename-qualified
+   grep (matches `programs.js` or `/programs.`, not bare `programs`)
+4. Applies the proportionality threshold: `required = ceil(source_lines / 50)`
+5. Classifies gaps by severity: CRITICAL (>500 lines), IMPORTANT (200-500 lines),
+   MINOR (<200 lines), TEST (test files)
+6. Writes `coverage-audit.json` with full gap list and triage summary
+7. Exits non-zero if any gaps found
 
-For each source file >100 lines, check that it appears in the raw output with adequate
-depth:
+**The orchestrator does NOT interpret the audit — it reads the script's JSON output.**
 
-1. **Grep each filename** (just the basename) across all raw output files for its repo.
-2. **Count the lines of analysis** that reference or describe that file.
-3. **Apply the proportionality threshold:**
-   - Required minimum analysis lines = `ceil(source_lines / 50)`
-   - Example: a 1,433-line file needs at least 29 lines of analysis
-4. **Flag files that fail:**
-   - NO mentions in any raw file → `MISSING`
-   - Mentioned but below threshold → `SHALLOW`
-   - Contains `## INCOMPLETE` marker → `INCOMPLETE`
+### 3.5b: Triage Gaps
 
-### 3.5c: Write Coverage Report
+Before spawning gap-fill agents, read `coverage-audit.json` and triage the gaps:
 
-Write to `./feature-inventory-output/coverage-audit.json`:
+1. **CRITICAL (>500 source lines, MISSING or SHALLOW):** These files contain significant
+   product behavior. Must be filled before Step 4.
 
-```json
-{
-  "audit_date": "ISO-8601",
-  "total_source_files": 156,
-  "total_source_lines": 48230,
-  "files_over_100_lines": 89,
-  "coverage": {
-    "adequate": 72,
-    "shallow": 8,
-    "missing": 5,
-    "incomplete": 4
-  },
-  "gaps": [
-    {
-      "file": "src/js/remote/ControlCenter.js",
-      "source_lines": 1433,
-      "analysis_lines": 1,
-      "required_lines": 29,
-      "status": "SHALLOW",
-      "relevant_dimensions": ["ui-screens"],
-      "suggested_action": "Re-analyze as dedicated agent task"
-    },
-    {
-      "file": "src/js/remote/PlaylistItemsUI.js",
-      "source_lines": 2775,
-      "analysis_lines": 4,
-      "required_lines": 56,
-      "status": "SHALLOW",
-      "relevant_dimensions": ["ui-screens", "business-logic"],
-      "suggested_action": "Re-analyze as dedicated agent task"
-    }
-  ]
-}
+2. **IMPORTANT (200-500 source lines, MISSING or SHALLOW):** Likely contain non-trivial
+   logic. Should be filled before Step 4 if possible.
+
+3. **MINOR (<200 source lines, SHALLOW only):** May be adequately covered by detail files
+   even if raw coverage is thin. The orchestrator should spot-check 3-5 of these — read
+   the first 20 lines of each source file and check if the behavior is already captured
+   in detail files. If so, mark as accepted. If not, queue for filling.
+
+4. **TEST FILES:** Test files (matching `*Tests.cs`, `*Test.cs`, `*.test.js`, `*.spec.js`,
+   etc.) document expected behavior and are valuable for the spec, but are lower priority
+   than production source. Fill these only after all CRITICAL and IMPORTANT gaps are
+   resolved. If context/budget is exhausted, mark test file gaps as
+   "DEFERRED — test coverage" in the audit report.
+
+5. **VENDOR-ADJACENT:** Files that the product owns but are infrastructure (connection
+   string factories, proxy attributes, service contracts, `.Designer.cs` files). These are
+   typically boilerplate. The orchestrator should spot-check and mark as accepted if
+   they're genuinely just wiring.
+
+Present the triage to the user:
+```
+Gap Triage:
+  CRITICAL:  {N} files ({total lines})
+  IMPORTANT: {N} files ({total lines})
+  MINOR:     {N} files ({total lines}) — {N} spot-checked and accepted
+  TEST:      {N} files — deferred
+
+Filling {N} gaps in {ceil(N/5)} batches...
 ```
 
-### 3.5d: Re-Queue Gaps
+### 3.5c: Fill Gaps (with Grouping)
 
-**This is a hard gate.** If there are ANY gaps with status MISSING, SHALLOW, or
-INCOMPLETE:
+**This is a hard gate.** If there are CRITICAL or IMPORTANT gaps:
 
 1. **Do NOT proceed to Step 4.**
-2. For each gap, create a new agent task scoped to that specific file or small group of
-   related files. Use the same dimension analyzer but with a narrow scope:
+2. **Group related files for the same agent.** When multiple gap files are in the same
+   directory or clearly related (e.g., `asyncio.cpp` + `asyncio.h`, or
+   `ScheduleRenderer.cs` + `ScheduleOptimizer.cs`), assign them to the same gap-fill
+   agent rather than one agent per file. This is more context-efficient.
+3. For each gap (or group), create a new agent task scoped to those specific files. Use
+   the same dimension analyzer but with a narrow scope:
    ```
    scope: "src/js/remote/ControlCenter.js"
    output_path: "raw/{repo-name}/ui-screens--ControlCenter.md"
    ```
-3. Spawn gap-filling teammates in batches of up to 5.
-4. After gap-fill agents complete, **re-run the coverage audit** (go back to 3.5b).
-5. Repeat until all files meet the proportionality threshold or are genuinely trivial
-   (orchestrator judgment — a 150-line config file with only constant definitions may
-   legitimately need only 3 lines of analysis).
-6. Only proceed to Step 4 when the coverage report shows 0 gaps, or the orchestrator
-   has reviewed and accepted each remaining gap as legitimate.
+4. Spawn gap-filling teammates in batches of up to 5.
+5. After gap-fill agents complete, **re-run the coverage audit script** (go back to 3.5a).
+
+### 3.5d: Cap Gap-Fill Cycles
+
+**Maximum 3 gap-fill cycles.** If gaps remain after 3 rounds of:
+  audit → triage → fill → re-audit
+then present remaining gaps to the user:
+
+```
+These {N} files still have shallow coverage after 3 fill cycles.
+This likely means the files contain patterns the analyzer agents
+can't fully decompose (e.g., very large procedural files, generated
+code, visualization shaders). Accept remaining gaps? [Y/N]
+```
+
+Only proceed to Step 4 when the coverage report shows 0 gaps, or the orchestrator
+has reviewed and accepted each remaining gap as legitimate, or 3 cycles have been
+exhausted and the user has accepted the remainder.
 
 ### 3.5e: Present Audit Summary
 
@@ -526,6 +583,176 @@ Each teammate runs in one of two modes depending on whether prior output exists.
 6. **After each batch:** Verify detail files exist for the completed feature areas.
    If a teammate failed or produced partial output, re-queue.
 
+### 4.5: User Resolution Interview (Mandatory — Blocks 4c)
+
+After synthesis, some features will be thin, ambiguous, or redundant. These are **worse
+than gaps** for downstream agents — an agent that encounters a vague spec will either skip
+it (creating a gap) or hallucinate around it (creating wrong behavior). This step resolves
+every ambiguous item through targeted user questions.
+
+#### 4.5a: Identify Candidates for Resolution
+
+Scan all detail files produced in 4b to find items that need user input. A feature is a
+**resolution candidate** if any of these apply:
+
+1. **Thin spec** — The detail file for a sub-feature has fewer than 10 lines of substantive
+   content (excluding headers, boilerplate, and empty sections). A behavior file with only
+   a name and one sentence of description is thin.
+
+2. **Majority-empty sections** — A sub-feature detail file where 5+ of the 9 dimension
+   sections are empty or contain only "None identified" / "N/A". This suggests the
+   synthesizer couldn't find enough raw data to characterize the feature.
+
+3. **Ambiguity markers** — Any detail file containing `[AMBIGUOUS]` tags that weren't
+   resolved in `clarifications.md` during Step 3.
+
+4. **Overlapping scope** — Two or more sub-features whose descriptions, data models, or
+   API endpoints substantially overlap. Detected by scanning for:
+   - Same entity names appearing in multiple sub-features under different parents
+   - Same API endpoints referenced in multiple sub-features
+   - Near-identical behavior descriptions across features
+
+5. **Orphan behaviors** — Behaviors that reference entities, endpoints, or events not
+   defined in any other feature's detail file. These may be misclassified.
+
+Build a resolution list:
+```json
+{
+  "candidates": [
+    {
+      "type": "thin",
+      "feature_id": "F-003.04",
+      "name": "Report Scheduling",
+      "detail_file": "details/F-003.04.md",
+      "reason": "Only 6 lines of content across 9 dimension sections",
+      "behaviors_affected": ["F-003.04.01", "F-003.04.02"]
+    },
+    {
+      "type": "overlap",
+      "features": ["F-001.03", "F-005.02"],
+      "reason": "Both reference UserPreferences entity and PATCH /api/preferences endpoint",
+      "detail_files": ["details/F-001.03.md", "details/F-005.02.md"]
+    },
+    {
+      "type": "ambiguous",
+      "feature_id": "F-007.01",
+      "name": "Notification Routing",
+      "detail_file": "details/F-007.01.md",
+      "reason": "3 unresolved [AMBIGUOUS] tags",
+      "ambiguities": ["Channel selection logic unclear", "Retry policy not in code", "Priority levels undocumented"]
+    }
+  ]
+}
+```
+
+#### 4.5b: Present Candidates and Interview the User
+
+For each candidate, ask the user a targeted question with three possible outcomes:
+
+**For thin specs:**
+```
+F-003.04 (Report Scheduling) has a thin specification — the automated analysis
+couldn't extract enough detail to make it implementable.
+
+Options:
+  [Define]  — Tell me what this feature does and I'll flesh out the spec
+  [Merge]   — This is actually part of another feature (which one?)
+  [Remove]  — This isn't a real feature / not needed in the rebuild
+```
+
+**For overlapping features:**
+```
+F-001.03 (User Preferences) and F-005.02 (Dashboard Customization) both reference
+the same UserPreferences entity and PATCH /api/preferences endpoint.
+
+Options:
+  [Keep both]   — They're distinct features that share infrastructure
+  [Merge into]  — Combine them (which one is the parent?)
+  [Clarify]     — Let me explain the distinction so you can update the specs
+```
+
+**For ambiguous items:**
+```
+F-007.01 (Notification Routing) has 3 unresolved ambiguities:
+  1. Channel selection logic — how does the system pick email vs push vs SMS?
+  2. Retry policy — what happens when a notification delivery fails?
+  3. Priority levels — are there priority tiers? How do they affect delivery?
+
+Please answer what you can. Say "skip" for any you're unsure about.
+```
+
+**For orphan behaviors:**
+```
+F-004.02.03 (Archive Audit Log Entry) references an AuditLog entity that
+doesn't appear in any other feature's data model.
+
+Options:
+  [Assign]  — It belongs under feature ___ (tell me which)
+  [Define]  — It's a real entity, let me describe it
+  [Remove]  — It's dead code / not needed
+```
+
+#### 4.5c: Apply Resolutions
+
+For each user response:
+
+- **Define**: Take the user's explanation and use it to rewrite or enrich the detail
+  file(s) and their behavior files. Use `Edit` to surgically update — don't regenerate
+  from scratch. Add the user's context to the appropriate dimension sections.
+
+- **Merge**: Combine the features:
+  1. Pick the surviving feature ID (user chooses, or use the one with more content).
+  2. Move unique behaviors from the absorbed feature into the survivor.
+  3. Update the survivor's detail file with any additional content from the absorbed one.
+  4. Delete the absorbed feature's detail file and its behavior files.
+  5. Update any cross-references in other features that pointed to the absorbed ID.
+
+- **Remove**: Delete the feature's detail file and all its behavior files. Note the
+  removal in `clarifications-features.md` with the reason so future runs don't
+  recreate it.
+
+- **Keep both** (overlaps): Add a `## Relationship` section to both detail files
+  explaining the distinction. This prevents downstream agents from being confused
+  by the shared infrastructure.
+
+- **Clarify** (overlaps): Take the user's explanation and add it as a `## Relationship`
+  section to both files. Update data model / API sections if the user identified which
+  feature owns the shared entities.
+
+- **Assign** (orphans): Move the behavior to the correct parent feature. Update both
+  the source and destination detail files.
+
+- **Skip** (ambiguities): Mark the ambiguity as `[UNRESOLVED — user unsure]` in the
+  detail file. This is honest — downstream agents know not to guess.
+
+Save all resolutions to `./feature-inventory-output/clarifications-features.md` with
+the feature ID, resolution type, and user's explanation for each.
+
+#### 4.5d: Batch Processing
+
+Present candidates to the user in batches of 5-8 to avoid overwhelming them. Group
+related candidates together (e.g., all overlaps in one batch, then thin specs, then
+ambiguities). After each batch:
+
+1. Apply the resolutions immediately.
+2. Re-check whether any resolutions created new overlaps or orphans (e.g., a merge
+   might expose a new overlap with a third feature).
+3. Present the next batch.
+
+After all candidates are resolved, present a summary:
+```
+Resolution Summary:
+  Defined (enriched):     {N} features
+  Merged:                 {N} features absorbed → {N} survivors
+  Removed:                {N} features
+  Overlaps clarified:     {N} pairs
+  Orphans reassigned:     {N} behaviors
+  Ambiguities resolved:   {N}
+  Ambiguities unresolved: {N} (marked [UNRESOLVED — user unsure])
+
+Proceeding to build the master index...
+```
+
 ### 4c: Build the Index (Orchestrator — after all teammates finish)
 
 Once all synthesis teammates have completed:
@@ -616,12 +843,16 @@ areas where original implementation was known to be problematic}
 ## Step 5: Validation & Summary
 
 1. **Cross-check against user's feature map.** Every feature they mentioned should appear.
-   Flag any missing.
-2. **Count check.** Report totals by tier.
+   Flag any missing. Account for features removed or merged in Step 4.5 — these are
+   expected absences, not gaps.
+2. **Count check.** Report totals by tier. Include before/after counts from Step 4.5
+   resolutions (e.g., "87 sub-features → 82 after 3 merges and 2 removals").
 3. **Coverage check.** Any raw outputs that didn't map to features?
 4. **Orphan check.** Any code that doesn't seem to belong to any feature?
-5. **Present summary** with counts, coverage, unresolved ambiguities, and file locations.
-6. **Ask the user** to review the index and flag anything missing or miscategorized.
+5. **Resolution check.** Report any remaining `[UNRESOLVED — user unsure]` markers from
+   Step 4.5. These are known ambiguities that downstream agents should handle defensively.
+6. **Present summary** with counts, coverage, unresolved ambiguities, and file locations.
+7. **Ask the user** to review the index and flag anything missing or miscategorized.
 
 ## Resume Behavior
 
@@ -631,6 +862,7 @@ These are cheap to rebuild and may be stale if raw data changed:
 ```bash
 rm -f ./feature-inventory-output/synthesis-plan.json
 rm -f ./feature-inventory-output/coverage-audit.json
+rm -f ./feature-inventory-output/coverage-audit-v2.json
 rm -f ./feature-inventory-output/FEATURE-INDEX.md
 rm -f ./feature-inventory-output/FEATURE-INDEX.json
 ```
@@ -638,7 +870,7 @@ rm -f ./feature-inventory-output/FEATURE-INDEX.json
 **Do NOT clear:**
 - `details/` — verify mode patches these incrementally; clearing forces a full rebuild
 - `raw/` — the expensive analysis output
-- `interview.md`, `user-feature-map.md`, `clarifications.md` — user input
+- `interview.md`, `user-feature-map.md`, `clarifications.md`, `clarifications-features.md` — user input
 - `discovery.json`, `plan.json` — reused if unchanged
 
 Then apply these resume rules:
@@ -646,8 +878,12 @@ Then apply these resume rules:
 - Step 1: Re-run unless `discovery.json` exists.
 - Step 2: Re-run unless `plan.json` exists and discovery hasn't changed.
 - Step 3: Skip completed dimensions (check raw output files).
-- Step 3.5: Always re-run (fast — scripted audit).
+- Step 3.5: Always re-run **using the scripted audit** (`scripts/coverage-audit.py`),
+  not LLM interpretation. The derived files were already cleared above.
 - Step 4a: Always re-run (synthesis-plan.json was cleared).
 - Step 4b: Run in **verify** mode for feature areas with existing detail files,
   **create** mode for those without. Never skip.
+- Step 4.5: Skip if `clarifications-features.md` exists — resolutions are already
+  applied to detail files. If detail files were regenerated (4b ran in create mode
+  for any feature), re-run 4.5 for those features only.
 - Step 4c: Always re-run (indexes were cleared).

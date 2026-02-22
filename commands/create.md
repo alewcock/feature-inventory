@@ -58,7 +58,12 @@ with complete schemas, types, rules, and edge cases. No hand-waving.
 
 ## Important: Context Window Management
 
-This is a large-scale analysis task. You MUST manage context carefully:
+**A "prompt is too long" error is CATASTROPHIC.** It kills the orchestrator session,
+orphans any running teammates, and loses all context accumulated during the run. This
+workflow spans many steps and can run for hours — the orchestrator MUST proactively
+manage its context to prevent this.
+
+### Core Rules
 
 1. **Never load entire codebases into context.** Use `Grep`, `Glob`, and targeted `Read`
    to sample and scan. Delegate deep analysis to sub-agents.
@@ -72,6 +77,21 @@ This is a large-scale analysis task. You MUST manage context carefully:
    spawning agents. If a dimension's output file already exists and is non-empty, skip
    that agent. This means the user can `/clear` and re-run `/feature-inventory` and it
    picks up where it left off.
+
+### Mandatory Context Checkpoints
+
+**This workflow has mandatory context checkpoints at every step boundary.** At each
+checkpoint, the orchestrator MUST evaluate its context health and clear if needed.
+See `references/context-management.md` § "Context Checkpoint Protocol" for the full
+protocol.
+
+Checkpoints are marked with `### Context Checkpoint` headers throughout this document.
+**Do not skip them.** Each checkpoint is a safe resume point — all prior state is on
+disk and the next step can start from those files.
+
+**The orchestrator should expect to `/clear` at least 2-3 times during a full
+inventory run.** This is normal and by design. The alternative — hitting "prompt is
+too long" — is catastrophic and unrecoverable.
 
 ## Step 0: User Interview
 
@@ -135,6 +155,16 @@ The orchestrator should:
 3. Save resolved answers to `./docs/features/clarifications.md`.
 4. Feed resolutions back to agents if re-running.
 
+### Context Checkpoint: After Interview
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+All interview state is on disk (`interview.md`, `user-feature-map.md`). If the interview
+was lengthy (many follow-up questions, complex product), context may already be significant.
+Evaluate and clear if needed — Step 1 resumes from `discovery.json` detection.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`
+
 ## Step 1: Discovery
 
 Determine what you're working with:
@@ -151,6 +181,16 @@ Determine what you're working with:
 4. Write discovery results to `./docs/features/discovery.json`
 5. Cross-check discovery against the user's interview answers. If there are repos or
    components they didn't mention, ask about them.
+
+### Context Checkpoint: After Discovery
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+Discovery results are on disk (`discovery.json`). If the codebase was large and required
+extensive structural scanning, clear before planning. Step 2 resumes from `plan.json`
+detection.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`, `discovery.json`
 
 ## Step 2: Plan
 
@@ -272,6 +312,17 @@ Apply these rules:
 
 Write to `./docs/features/plan.json`.
 
+### Context Checkpoint: After Planning
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+The analysis plan is on disk (`plan.json`). Step 3 (agent team execution) is the most
+context-intensive phase — monitoring batches of teammates will rapidly consume context.
+**Strongly recommend clearing here** to enter Step 3 with maximum headroom.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`discovery.json`, `plan.json`
+
 ## Step 3: Execute Analysis via Agent Teams
 
 Create an Agent Team for the analysis. You (the lead) coordinate. Teammates do the
@@ -334,6 +385,21 @@ If a teammate fails (empty output, error, or context exhaustion):
 4. If empty: re-queue the dimension for the next batch.
 5. After all batches complete, do a cleanup pass: re-spawn teammates for any
    failed/incomplete dimensions.
+
+### Context Checkpoint: After Analysis Execution
+
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
+in `references/context-management.md`.
+
+Step 3 involves monitoring multiple batches of teammates, collecting ambiguities, handling
+failures, and re-queuing — this is the single largest context consumer in the entire
+workflow. After completing Step 3, the orchestrator's context is almost certainly heavy.
+
+**Clear here.** All analysis output is on disk in `raw/`. The coverage audit (Step 3.5)
+starts fresh from those files.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`discovery.json`, `plan.json`, `raw/*` (all dimension outputs)
 
 ## Step 3.5: Source Coverage Audit (Mandatory — Blocks Step 4)
 
@@ -466,6 +532,20 @@ Re-queuing {N} files for targeted re-analysis...
 All source files adequately covered. Proceeding to synthesis.
 ```
 
+### Context Checkpoint: After Coverage Audit
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+The coverage audit may have involved multiple gap-fill cycles (up to 3), each spawning
+agent batches and re-running the audit script. If ANY gap-fill cycles were needed,
+context is heavy — **clear before Step 4.**
+
+Even if no gap-fill was needed, evaluate context from the audit triage and user
+interactions. Step 4 spawns another round of agent teams and must have sufficient headroom.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`discovery.json`, `plan.json`, `raw/*`, `coverage-audit.json`
+
 ## Step 4: Build Feature Hierarchy, Index, and Detail Files
 
 This is the most important step and is **parallelized via Agent Teams** just like Step 3.
@@ -582,6 +662,21 @@ Each teammate runs in one of two modes depending on whether prior output exists.
 
 6. **After each batch:** Verify detail files exist for the completed feature areas.
    If a teammate failed or produced partial output, re-queue.
+
+### Context Checkpoint: After Synthesis
+
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
+in `references/context-management.md`.
+
+Step 4a-4b involved building the feature map (reading headers from all raw files) and
+monitoring synthesis teammates in batches. This is another heavy context consumer.
+
+**Clear here.** All synthesis output is on disk in `details/`. Step 4.5 (resolution
+interview) scans detail files and interacts with the user — it needs headroom.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`discovery.json`, `plan.json`, `raw/*`, `coverage-audit.json`,
+`synthesis-plan.json`, `details/*`
 
 ### 4.5: User Resolution Interview (Mandatory — Blocks 4c)
 
@@ -752,6 +847,18 @@ Resolution Summary:
 
 Proceeding to build the master index...
 ```
+
+### Context Checkpoint: After Resolution Interview
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+The resolution interview involved scanning detail files, presenting candidates to the user
+in batches, and applying resolutions (edits, merges, deletions). If there were many
+resolution candidates, context is heavy. Evaluate and clear if needed.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`clarifications-features.md`, `discovery.json`, `plan.json`, `raw/*`,
+`coverage-audit.json`, `synthesis-plan.json`, `details/*` (with resolutions applied)
 
 ### 4c: Build the Index (Orchestrator — after all teammates finish)
 

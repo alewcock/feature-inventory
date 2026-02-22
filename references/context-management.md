@@ -141,6 +141,98 @@ Tag it inline: `[AMBIGUOUS] {description of what's unclear}`
 
 The orchestrator will collect these and ask the user.
 
+## Context Checkpoint Protocol (Orchestrators Only)
+
+**This section applies to the lead orchestrator, not to teammates.** Teammates have fresh
+context windows and rarely hit limits. The orchestrator, however, runs for the entire
+duration of a multi-step workflow (potentially hours) and its conversation history grows
+with every tool call, monitoring response, and user interaction.
+
+**If the orchestrator hits "prompt is too long", the entire session dies.** Running
+teammates become orphaned. All orchestrator context is lost. The user must start over
+(or resume from disk, losing the cost of everything since the last checkpoint). This
+is catastrophic and must be prevented.
+
+### Mandatory Context Checkpoints
+
+At designated checkpoint locations in the orchestrator workflow, the orchestrator MUST:
+
+1. **Verify all state is on disk.** Every piece of information needed to resume must
+   exist as a file — interviews, plans, configs, raw outputs, audit results, synthesis
+   plans, clarifications. The orchestrator should NOT be carrying state only in
+   conversation context.
+
+2. **Evaluate context health.** Consider how much work has been done since the last
+   `/clear` or session start:
+   - How many tool calls have been made?
+   - How many agent batches have been monitored?
+   - How many user interactions have occurred?
+   - How many file reads/writes have accumulated in context?
+
+3. **If context is heavy, MANDATE a clear.** Do not suggest it as optional. Tell the user:
+
+   ```
+   ⚠ CONTEXT CHECKPOINT — CLEAR REQUIRED
+
+   Steps {completed} are done. All state is saved to disk.
+   The orchestrator's context has accumulated significant history
+   from {description of what was done}. Continuing without clearing
+   risks a "prompt is too long" error that would kill this session
+   and orphan any running teammates.
+
+   Action required:
+     1. Run /clear
+     2. Re-run the command (it will resume from Step {next})
+
+   Everything is preserved:
+     {list of files that will be reloaded}
+   ```
+
+4. **If context is light, note the checkpoint and continue.**
+
+   ```
+   ✓ Context checkpoint (after Step {N}): context is healthy, continuing.
+   ```
+
+### How to Estimate Context Health
+
+You cannot directly measure your context usage, but you can estimate based on activity
+since the session started (or last `/clear`):
+
+| Activity Since Start/Clear | Risk Level | Action |
+|---|---|---|
+| 1-2 steps, <10 tool calls | Low | Continue |
+| 2-3 steps, 10-30 tool calls | Medium | Continue with caution |
+| 3+ steps, 30-50 tool calls | High | Recommend clear |
+| 4+ steps, 50+ tool calls, or any agent monitoring | Critical | MANDATE clear |
+
+**Agent monitoring is the biggest context consumer.** Each `TaskList` call, each
+`SendMessage` exchange, each batch completion check adds to context. After monitoring
+even a single batch of 5 teammates, the orchestrator has typically consumed significant
+context.
+
+### Checkpoint Placement Rules
+
+Checkpoints are placed at **every step boundary** in orchestrator workflows. Each
+checkpoint is a natural resume point — all prior state is on disk, and the next step
+can start from those files.
+
+The orchestrator workflows (`create.md`, `plan.md`) specify exact checkpoint locations
+with `### Context Checkpoint` markers. Do not skip them.
+
+### Emergency Mid-Step Saves
+
+If at any point during a step the orchestrator senses context is growing dangerously
+(e.g., monitoring a large batch of teammates, or processing many gap-fill cycles):
+
+1. **Finish the current sub-step** (e.g., let the current batch complete).
+2. **Write all intermediate state to disk.**
+3. **Present the clear mandate** to the user with resume instructions.
+4. **Do NOT start the next sub-step.**
+
+This is an escape valve — it should rarely be needed if checkpoints are respected,
+but it prevents the catastrophic "prompt is too long" crash.
+
 ## Failure Recovery
 
 If you're spawned and the output file already has partial content:

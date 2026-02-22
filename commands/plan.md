@@ -47,8 +47,12 @@ but no full function bodies.
 
 ## Important: Context Window Management
 
-Plan generation reads from the feature inventory AND produces substantial output.
-Manage context carefully:
+**A "prompt is too long" error is CATASTROPHIC.** It kills the orchestrator session,
+orphans any running teammates, and loses all context accumulated during the run. This
+workflow spans many steps and can run for hours — the orchestrator MUST proactively
+manage its context to prevent this.
+
+### Core Rules
 
 1. **Never load the full inventory into context.** Use the FEATURE-INDEX.json for
    structure, read detail files one at a time.
@@ -58,6 +62,20 @@ Manage context carefully:
    payloads in conversation.
 4. **Resume capability:** Check for existing plan output files before spawning
    agents. Skip completed areas.
+
+### Mandatory Context Checkpoints
+
+**This workflow has mandatory context checkpoints at every step boundary.** At each
+checkpoint, the orchestrator MUST evaluate its context health and clear if needed.
+See `references/context-management.md` § "Context Checkpoint Protocol" for the full
+protocol.
+
+Checkpoints are marked with `### Context Checkpoint` headers throughout this document.
+**Do not skip them.** Each checkpoint is a safe resume point — all prior state is on
+disk and the next step can start from those files.
+
+**The orchestrator should expect to `/clear` at least 1-2 times during a full
+plan generation run.** This is normal and by design.
 
 ## Inputs
 
@@ -335,6 +353,16 @@ Write the strategic decisions to `./docs/plans/plan-config.json`:
 }
 ```
 
+### Context Checkpoint: After Strategic Interview
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+All interview state is on disk (`interview.md`, `plan-config.json`). If the interview
+was lengthy, evaluate context and clear if needed — Step 2 resumes from `research.md`
+detection.
+
+Preserved files: `interview.md`, `plan-config.json`
+
 ## Step 2: Create Agent Team & Execute Research
 
 Create the Agent Team that will be used throughout the planning process. Then use
@@ -487,6 +515,16 @@ read `synthesis.md` + `plan-config.json` instead of separately reading interview
 research, and inventory overview files. This reduces context usage per teammate
 and ensures consistent interpretation across all feature plans.
 
+### Context Checkpoint: After Research & Synthesis
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+Research involved monitoring teammates and merging their outputs. Synthesis involved
+reading and reconciling multiple documents. All results are on disk (`research.md`,
+`synthesis.md`). Evaluate context and clear if needed.
+
+Preserved files: `interview.md`, `plan-config.json`, `research.md`, `synthesis.md`
+
 ## Step 3: Create Planning Strategy
 
 Based on the synthesis, research, and inventory, create the planning approach.
@@ -559,24 +597,18 @@ Write `./docs/plans/planning-strategy.json`:
 }
 ```
 
-## Context Check: Before Plan Generation
+### Context Checkpoint: Before Plan Generation
 
-Plan generation (Step 4) spawns many teammates and can take significant time. Before
-proceeding, check your context usage. If you've consumed substantial context through
-the interview, research, and strategy steps, inform the user:
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
+in `references/context-management.md`.
 
-```
-Context check: Steps 1-3 complete. Step 4 (plan generation) will spawn
-{N} plan-writer teammates. This is the most expensive step.
+Steps 1-3 have accumulated interview interactions, research monitoring, document reads,
+and strategy generation. Step 4 (plan generation) is the most context-intensive phase —
+it monitors multiple batches of plan-writer teammates. **Clear here** to enter Step 4
+with maximum headroom.
 
-Options:
-  1. Continue — proceed with plan generation
-  2. /clear + re-run — fresh context, resumes from Step 3 (interview,
-     research, and config are preserved on disk)
-```
-
-The user can choose. Either way, the orchestrator proceeds correctly thanks to
-file-based resume detection.
+Preserved files: `interview.md`, `plan-config.json`, `research.md`, `synthesis.md`,
+`planning-strategy.json`
 
 ## Step 4: Generate Feature Plans via Agent Teams
 
@@ -666,6 +698,19 @@ If a teammate fails:
 3. If nothing exists: re-queue with "create" mode.
 4. After all batches, do a cleanup pass for any incomplete features.
 
+### Context Checkpoint: After Plan Generation
+
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
+in `references/context-management.md`.
+
+Step 4 involved monitoring multiple batches of plan-writer teammates, validating outputs,
+and handling failures. This is the heaviest context consumer in the plan workflow.
+**Clear here** before validation.
+
+Preserved files: `interview.md`, `plan-config.json`, `research.md`, `synthesis.md`,
+`planning-strategy.json`, `features/*/plan.md`, `features/*/plan-tdd.md`,
+`features/*/sections/*`
+
 ## Step 5: Validate Plans
 
 After all teammates complete:
@@ -694,6 +739,16 @@ Present any inconsistencies to the user for resolution.
 
 Report total sections across all plans. If any feature has 0 sections or seems
 disproportionately small/large relative to its behavior count, flag it.
+
+### Context Checkpoint: After Validation
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+Validation involved scanning plans for coverage, consistency, and section counts.
+If inconsistencies were found and resolved, additional context was consumed. Evaluate
+and clear if needed — Step 6 and beyond can resume from plan files on disk.
+
+Preserved files: All plan files, `planning-strategy.json`, config files
 
 ## Step 6: External Review (Optional)
 
@@ -767,6 +822,16 @@ Critical findings: {N} (all addressed)
 Improvements noted: {N} (added to Migration Notes)
 Style suggestions: {N} (skipped)
 ```
+
+### Context Checkpoint: After External Review
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+If external review was run, it involved reading plans, making API calls, processing
+responses, and applying fixes. If skipped, this checkpoint is still evaluated (it may
+inherit context load from prior steps). Evaluate and clear if needed.
+
+Preserved files: All plan files, review files (if generated), config files
 
 ## Step 7: Build Plan Index
 

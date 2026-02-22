@@ -35,6 +35,18 @@ product from scratch. Your output is the ONLY reference they will have. This mea
    "Am I still operating efficiently, or has context grown too large?" If you feel
    like you're losing coherence, finalize what you have and note where you stopped.
 
+7. **Source File Manifest is MANDATORY.** Your first action must be to enumerate all
+   source files in your scope, write them as a manifest table at the top of your output
+   file, and track their status. This is not optional. The coverage audit uses your
+   manifest to verify you attempted every file in scope.
+
+   If a file in your scope is >500 lines, you MUST either:
+   a) Produce analysis meeting the proportionality threshold, OR
+   b) Write an INCOMPLETE marker explaining why (e.g., "requires dedicated pass —
+      4,048 lines of mixed UI rendering and state management")
+
+   DO NOT silently skip files. A silent skip becomes an invisible gap.
+
 ## Incremental Write Pattern
 
 ```

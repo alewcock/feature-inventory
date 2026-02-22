@@ -126,6 +126,7 @@ To resume: run /feature-inventory:gap-analysis
       - `sections/index.md` exists? Section index created
       - Count `sections/section-*.md` files for section progress
     - Check cross-cutting plan: `./docs/plans/features/cross-cutting/plan.md`
+    - For each feature, check `reviews/` directory for external review files.
     - `PLAN-INDEX.md` exists? Report.
     - `PLAN-INDEX.json` exists? Report.
     - Present plan generation summary:
@@ -141,15 +142,16 @@ Research: {complete / not started}
 Planning Strategy: {created / not created}
 
 Feature Plans:
-| Feature | Plan | TDD | Sections | Status |
-|---------|------|-----|----------|--------|
-| cross-cutting | DONE | DONE | 3/3 | Complete |
-| F-001: User Management | DONE | DONE | 4/6 | In Progress |
-| F-002: Billing | PENDING | - | - | Not Started |
-| ... | ... | ... | ... | ... |
+| Feature | Plan | TDD | Sections | Review | Status |
+|---------|------|-----|----------|--------|--------|
+| cross-cutting | DONE | DONE | 3/3 | Gemini+OpenAI | Complete |
+| F-001: User Management | DONE | DONE | 4/6 | - | In Progress |
+| F-002: Billing | PENDING | - | - | - | Not Started |
+| ... | ... | ... | ... | ... | ... |
 
 Plans: {done}/{total} complete, {in_progress} in progress, {pending} pending
 Sections: {done}/{total} written
+External Reviews: {N}/{total} reviewed
 
 Plan Index: {generated / not generated}
 

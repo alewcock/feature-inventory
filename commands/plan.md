@@ -104,9 +104,19 @@ to rebuild it.
 If `./docs/plans/interview.md` already exists, read it, summarize what you already know,
 and ask only if there are gaps. Don't re-interview.
 
-### Required Questions
+### Interview Protocol
 
-Ask these using `AskUserQuestion`. Be conversational — adapt follow-up questions based
+**Adaptive, not prescriptive.** The questions below are starting points, not a fixed
+script. Follow the user's natural way of describing the rebuild. Stop asking when you
+have enough to make informed planning decisions — don't force all categories if the
+answers are already clear.
+
+**Uncertainty mapping.** Pay attention to hesitation, qualifiers ("maybe", "probably",
+"I'm not sure"), and vague areas. Flag these explicitly in the interview transcript
+with `[UNCERTAIN]` tags. Uncertain areas get extra attention during research (Step 2)
+and plan validation (Step 5).
+
+Ask using `AskUserQuestion`. Be conversational — adapt follow-up questions based
 on answers. When something is surprising or reveals complexity, dig deeper.
 
 #### 1. Rebuild Motivation
@@ -423,6 +433,25 @@ Write `./docs/plans/planning-strategy.json`:
 }
 ```
 
+## Context Check: Before Plan Generation
+
+Plan generation (Step 4) spawns many teammates and can take significant time. Before
+proceeding, check your context usage. If you've consumed substantial context through
+the interview, research, and strategy steps, inform the user:
+
+```
+Context check: Steps 1-3 complete. Step 4 (plan generation) will spawn
+{N} plan-writer teammates. This is the most expensive step.
+
+Options:
+  1. Continue — proceed with plan generation
+  2. /clear + re-run — fresh context, resumes from Step 3 (interview,
+     research, and config are preserved on disk)
+```
+
+The user can choose. Either way, the orchestrator proceeds correctly thanks to
+file-based resume detection.
+
 ## Step 4: Generate Feature Plans via Agent Teams
 
 Use the team created in Step 2. You (the lead) coordinate. Teammates write the
@@ -536,16 +565,89 @@ Present any inconsistencies to the user for resolution.
 Report total sections across all plans. If any feature has 0 sections or seems
 disproportionately small/large relative to its behavior count, flag it.
 
-## Step 6: Build Plan Index
+## Step 6: External Review (Optional)
 
-### 6a: Write PLAN-INDEX.md
+If the user has external LLM API keys configured, offer independent plan review
+using a different model family. This catches blind spots that self-review misses —
+a different model finds different issues.
+
+### 6a: Check Availability
+
+Check for API keys in environment variables:
+- `GEMINI_API_KEY` or `GOOGLE_APPLICATION_CREDENTIALS` (for Gemini)
+- `OPENAI_API_KEY` (for OpenAI)
+
+If neither is available, skip this step entirely. If available, ask the user:
+
+```
+question: "Run external LLM review on the generated plans?"
+header: "Review"
+options:
+  - label: "Yes, review plans"
+    description: "Send plans to {available models} for independent critique (catches blind spots)"
+  - label: "Skip review"
+    description: "Proceed directly to index generation"
+```
+
+### 6b: Run Reviews
+
+For each feature plan where review is requested:
+
+1. Read the feature's `plan.md` (it's self-contained — no other files needed).
+2. Send it to available external models with this prompt:
+
+   > You are a senior software architect reviewing an implementation plan for
+   > a legacy product rebuild. Identify: potential footguns and edge cases,
+   > missing considerations, security vulnerabilities, performance issues,
+   > architectural problems, unclear or ambiguous requirements, and gaps
+   > between the plan's stated coverage and what would actually be needed
+   > to implement this feature.
+
+3. Write each review to `./docs/plans/features/{feature_id}/reviews/`:
+   - `review-gemini.md` (if Gemini available)
+   - `review-openai.md` (if OpenAI available)
+
+If you have access to `Bash`, use it to call the external APIs:
+```bash
+# Example for OpenAI
+curl -s https://api.openai.com/v1/chat/completions \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "gpt-4o", "messages": [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}]}'
+```
+
+For large plans, send only the plan.md (not sections) — it contains the full
+architecture, section decomposition, and behaviors checklist.
+
+### 6c: Incorporate Findings
+
+Read the review files. For each finding:
+- **Critical issues** (security, correctness, missing functionality): Update the
+  affected plan.md and section files immediately.
+- **Improvements** (performance, architecture suggestions): Note in the plan's
+  Migration Notes section for the implementer to consider.
+- **Style/preference**: Ignore — different models have different opinions.
+
+Present a summary of changes made:
+```
+External Review Summary
+========================
+Reviews: {N} plans reviewed by {model names}
+Critical findings: {N} (all addressed)
+Improvements noted: {N} (added to Migration Notes)
+Style suggestions: {N} (skipped)
+```
+
+## Step 7: Build Plan Index
+
+### 7a: Write PLAN-INDEX.md
 
 Read only the first 10-15 lines of each `plan.md` (the header with metadata) and
 the `sections/index.md` files to build the master index. Do NOT re-read full plans.
 
 Follow the template in `references/plan-output-format.md`.
 
-### 6b: Write PLAN-INDEX.json
+### 7b: Write PLAN-INDEX.json
 
 Build the machine-readable index from:
 - `plan-config.json` for tech stack and strategy
@@ -553,7 +655,7 @@ Build the machine-readable index from:
 - Each feature's `sections/index.md` for section details
 - FEATURE-INDEX.json for behavior counts
 
-## Step 7: Present Summary
+## Step 8: Present Summary
 
 ```
 Plan Generation Complete
@@ -578,6 +680,12 @@ Existing code status:
   - Done: {N} behaviors (plans adjusted)
   - Partial: {N} behaviors (plans include completion steps)
   - Not started: {N} behaviors (full plans generated)
+
+{If external review was run:}
+External review:
+  - Models used: {Gemini, OpenAI, ...}
+  - Critical findings addressed: {N}
+  - Improvements noted: {N}
 
 Output:
   - Plan index: ./docs/plans/PLAN-INDEX.md
@@ -616,7 +724,11 @@ Then apply these resume rules:
 - Step 1: Skip if `interview.md` exists (load it for context).
 - Step 2: Skip if `research.md` exists.
 - Step 3: Always re-run (planning-strategy.json was cleared).
+- Context check: Always present (quick).
 - Step 4: Run in **update** mode for features with existing plans, **create** mode
   for those without. Never skip.
 - Step 5: Always re-run.
-- Step 6: Always re-run (indexes were cleared).
+- Step 6: Skip if `reviews/` directories exist for all features. Re-run if new plans
+  were generated or updated in Step 4.
+- Step 7: Always re-run (indexes were cleared).
+- Step 8: Always present.

@@ -132,6 +132,26 @@ Break the feature into implementable sections. Each section should be:
 - **Testable**: Has clear acceptance criteria tied to inventory behaviors
 - **Right-sized**: Not too big (would overwhelm context) or too small (trivial)
 
+**Section sizing heuristics:**
+
+A section is **too big** if:
+- It covers multiple distinct subsystems (data layer + API + UI = 3 sections)
+- Describing it requires repeated "and also..." phrases
+- It would produce a section file longer than ~500 lines
+- It covers more than ~15 inventory behaviors
+- An implementer would need to context-switch between unrelated concerns
+
+A section is **too small** if:
+- It's a single function or trivial CRUD operation
+- No architectural decisions are needed
+- It can be fully specified in a few sentences
+- It covers fewer than 2 inventory behaviors
+
+A section is **not splittable** if:
+- Components have tight coupling that makes independent work impossible
+- Splitting would force the implementer to hold both halves in mind anyway
+- The "interface" between halves would be more complex than the implementation
+
 **Typical section decomposition:**
 1. Data models & migrations (schema, entities, relationships)
 2. Core business logic (rules, calculations, state machines)

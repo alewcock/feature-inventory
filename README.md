@@ -260,7 +260,7 @@ After synthesis, the orchestrator scans all detail files to identify features th
 
 This eliminates the "shallow feature" problem where downstream agents encounter vague specs and either skip them or hallucinate. Every feature in the final index is either fully specified, explicitly related to another feature, or honestly marked as unresolved.
 
-### Plan Generation (Steps 1-7)
+### Plan Generation (Steps 1-8)
 
 Plan generation uses Agent Teams at three levels:
 
@@ -268,7 +268,12 @@ Plan generation uses Agent Teams at three levels:
 2. **Plan Writers**: Parallel teammates producing feature plans (batches of 5). Each plan-writer maps inventory behaviors to the target architecture, decomposes into implementation sections, and writes TDD test stubs.
 3. **Section Writers**: Within each plan-writer, parallel teammates writing individual section files (batches of 5). Each section is self-contained — an implementer reads only that file and can start building.
 
-The orchestrator conducts a strategic interview first (motivation, tech stack, architecture, scope) that shapes all downstream plans, then delegates the heavy lifting to teammates.
+The orchestrator conducts an adaptive strategic interview first (motivation, tech stack, architecture, scope) with uncertainty mapping, then delegates the heavy lifting to teammates. After plans are generated, an optional **external LLM review** step sends plans to Gemini and/or OpenAI for independent critique — catching blind spots that self-review misses.
+
+Plan output is designed to work with multiple implementation tools:
+- **`/workflows:work`** (compound engineering) — task-based execution with multi-agent review
+- **`/deep-implement`** — sequential TDD with code review gates
+- **Any AI agent** — each section file is a standalone blueprint
 
 ## Agents
 

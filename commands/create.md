@@ -93,6 +93,22 @@ disk and the next step can start from those files.
 inventory run.** This is normal and by design. The alternative — hitting "prompt is
 too long" — is catastrophic and unrecoverable.
 
+### Automated Context Watchdog
+
+A PostToolUse hook (`scripts/context-watchdog.py`) monitors context health in real time.
+It tracks tool call count and transcript size, injecting escalating warnings into the
+orchestrator's context. At critical levels, it BLOCKS agent-spawning tools (TaskCreate,
+TeamCreate, SendMessage) to prevent starting work that will be lost.
+
+**If you see a watchdog warning, treat it like a fire alarm.** Save state and checkpoint.
+See `references/context-management.md` § "Context Watchdog" for details.
+
+### Orchestrator Progress File
+
+Maintain `./docs/features/.progress.json` throughout the workflow. Update it after every
+batch completes. On resume, read it FIRST to know exactly where to pick up. See
+`references/context-management.md` § "Orchestrator Progress File" for the schema.
+
 ## Step 0: User Interview
 
 Before touching any code, interview the user. Legacy products carry decades of implicit
@@ -250,12 +266,19 @@ Record these as `deduplicate_paths` so the audit only checks one copy.
 
 ### Splitting Strategy
 
-Splitting is critical to prevent context exhaustion. A single agent cannot adequately
-analyze thousands of lines of source code — it will triage and produce shallow stubs.
+Splitting is critical to prevent context exhaustion AND to keep teammate runtime short.
+A single agent cannot adequately analyze thousands of lines of source code — it will
+triage and produce shallow stubs. Long-running teammates also risk their own context
+limits and delay the overall workflow.
+
+**Target: each teammate should complete in ~5 minutes.** If a task would take longer,
+split it further. More smaller tasks = more frequent progress saves, less work lost
+on failure, and faster batch turnaround for the orchestrator.
+
 Apply these rules:
 
 1. **Per-module split** (`split_by_module: true`): For repos with >500 source files OR
-   any dimension where the relevant source directories total >2,000 lines, split into
+   any dimension where the relevant source directories total >1,500 lines, split into
    separate agent tasks per top-level module/directory.
 
 2. **Per-file split**: After identifying the files each agent will analyze, check file
@@ -269,7 +292,12 @@ Apply these rules:
    }
    ```
 
-3. **Estimating scope**: During discovery (Step 1), collect line counts per directory.
+3. **Max scope per teammate**: No single teammate task should cover more than ~1,500
+   lines of source code. If a module or directory exceeds this, split it further by
+   subdirectory or by file groups. Two teammates covering 750 lines each produce
+   better output — and finish faster — than one teammate covering 1,500 lines.
+
+4. **Estimating scope**: During discovery (Step 1), collect line counts per directory.
    Use these to make splitting decisions. When in doubt, split more aggressively —
    two agents covering 500 lines each produce better output than one agent triaging
    1,000 lines.
@@ -360,8 +388,12 @@ For each repo and each dimension in the plan:
      every default value, every edge case, every validation rule, every error message,
      every timeout, every sort order, every conditional branch. If you can see it in the
      code, document it. Flag anything ambiguous with [AMBIGUOUS]. This output will be
-     the sole reference for an AI agent team rebuilding this feature from scratch."**
+     the sole reference for an AI agent team rebuilding this feature from scratch.
+     IMPORTANT: Write findings to disk every 5-10 items — never accumulate more than
+     10 items before writing. If you crash, only the unwritten items should be lost."**
 5. **Wait for the batch to finish** before spawning the next batch.
+6. **Update `.progress.json`** after each batch completes with the list of completed
+   and pending dimensions.
 
 Use Sonnet for teammates where possible to manage token costs. The lead (Opus) handles
 coordination and the final merge/index generation.
@@ -373,8 +405,9 @@ While teammates work:
 2. When teammates flag `[AMBIGUOUS]` items (via `SendMessage` or in their output files),
    collect them.
 3. After each batch completes, verify output files exist and are non-empty.
-4. Present ambiguities to the user in batches of 5-10 for resolution.
-5. Save resolutions to `./docs/features/clarifications.md`.
+4. **Update `.progress.json`** with completed/pending/failed dimensions.
+5. Present ambiguities to the user in batches of 5-10 for resolution.
+6. Save resolutions to `./docs/features/clarifications.md`.
 
 ### 3d: Handle Failures
 
@@ -963,7 +996,11 @@ areas where original implementation was known to be problematic}
 
 ## Resume Behavior
 
-On every run, **auto-clear derived synthesis artifacts** that are always regenerated.
+On every run, first **check for `.progress.json`**. If it exists, read it to determine
+exactly where the previous run stopped. This is faster and more reliable than scanning
+output files.
+
+Then **auto-clear derived synthesis artifacts** that are always regenerated.
 These are cheap to rebuild and may be stale if raw data changed:
 
 ```bash
@@ -975,6 +1012,7 @@ rm -f ./docs/features/FEATURE-INDEX.json
 ```
 
 **Do NOT clear:**
+- `.progress.json` — the orchestrator's resume state (cleared only after Step 5 completes)
 - `details/` — verify mode patches these incrementally; clearing forces a full rebuild
 - `raw/` — the expensive analysis output
 - `interview.md`, `user-feature-map.md`, `clarifications.md`, `clarifications-features.md` — user input
@@ -984,12 +1022,14 @@ Then apply these resume rules:
 - Step 0: Skip if `interview.md` exists (load it for context).
 - Step 1: Re-run unless `discovery.json` exists.
 - Step 2: Re-run unless `plan.json` exists and discovery hasn't changed.
-- Step 3: Skip completed dimensions (check raw output files).
+- Step 3: Use `.progress.json` to skip completed dimensions and resume from the
+  exact batch that was in progress. Fall back to scanning raw output files if no
+  progress file exists.
 - Step 3.5: Always re-run **using the scripted audit** (`scripts/coverage-audit.py`),
   not LLM interpretation. The derived files were already cleared above.
 - Step 4a: Always re-run (synthesis-plan.json was cleared).
-- Step 4b: Run in **verify** mode for feature areas with existing detail files,
-  **create** mode for those without. Never skip.
+- Step 4b: Use `.progress.json` to determine which feature areas need create vs verify
+  mode. Fall back to scanning detail files if no progress file exists.
 - Step 4.5: Skip if `clarifications-features.md` exists — resolutions are already
   applied to detail files. If detail files were regenerated (4b ran in create mode
   for any feature), re-run 4.5 for those features only.

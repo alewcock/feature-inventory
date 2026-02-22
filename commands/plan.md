@@ -77,6 +77,22 @@ disk and the next step can start from those files.
 **The orchestrator should expect to `/clear` at least 1-2 times during a full
 plan generation run.** This is normal and by design.
 
+### Automated Context Watchdog
+
+A PostToolUse hook (`scripts/context-watchdog.py`) monitors context health in real time.
+It tracks tool call count and transcript size, injecting escalating warnings into the
+orchestrator's context. At critical levels, it BLOCKS agent-spawning tools (TaskCreate,
+TeamCreate, SendMessage) to prevent starting work that will be lost.
+
+**If you see a watchdog warning, treat it like a fire alarm.** Save state and checkpoint.
+See `references/context-management.md` § "Context Watchdog" for details.
+
+### Orchestrator Progress File
+
+Maintain `./docs/plans/.progress.json` throughout the workflow. Update it after every
+batch completes. On resume, read it FIRST to know exactly where to pick up. See
+`references/context-management.md` § "Orchestrator Progress File" for the schema.
+
 ## Inputs
 
 The command accepts one optional argument:
@@ -672,8 +688,16 @@ For each feature in scope:
      TDD test stubs, system-wide impact analysis, and monitoring guidance. Plans
      are prose — no full code implementations. Flag any [UNCERTAIN] areas from
      synthesis.md that affect this feature. Write files to disk immediately as
-     you complete each one."**
+     you complete each one — write plan.md first, then each section file
+     individually. Never accumulate more than one section in context before
+     writing it to disk."**
 5. **Wait for each batch to finish** before spawning the next.
+6. **Update `.progress.json`** after each batch with completed/pending/failed features.
+
+**Teammate sizing:** If a feature has >50 behaviors, consider splitting it across
+multiple teammates — one for plan.md (the main plan) and a sub-team for section
+files (using plan-section-writer). This keeps individual teammate runtime under
+~5 minutes and ensures frequent disk writes.
 
 Use Sonnet for teammates where possible to manage token costs. The lead (Opus)
 handles coordination and the final index generation.
@@ -682,7 +706,8 @@ handles coordination and the final index generation.
 
 While teammates work:
 1. Monitor progress via `TaskList`.
-2. After each batch completes, verify plan files exist:
+2. **Update `.progress.json`** after each batch completes.
+3. After each batch completes, verify plan files exist:
    - `plan.md` exists and is non-empty
    - `plan-tdd.md` exists
    - `sections/index.md` exists
@@ -900,7 +925,11 @@ Next steps:
 
 ## Resume Behavior
 
-On every run, **auto-clear derived artifacts** that are always regenerated:
+On every run, first **check for `.progress.json`**. If it exists, read it to determine
+exactly where the previous run stopped. This is faster and more reliable than scanning
+output files.
+
+Then **auto-clear derived artifacts** that are always regenerated:
 
 ```bash
 rm -f ./docs/plans/planning-strategy.json
@@ -909,6 +938,7 @@ rm -f ./docs/plans/PLAN-INDEX.json
 ```
 
 **Do NOT clear:**
+- `.progress.json` — the orchestrator's resume state (cleared only after Step 8 completes)
 - `interview.md` — user input
 - `plan-config.json` — user decisions
 - `research.md` — expensive research output
@@ -920,9 +950,10 @@ Then apply these resume rules:
 - Step 1: Skip if `interview.md` exists (load it for context).
 - Step 2: Skip if `research.md` exists. Skip synthesis (2e) if `synthesis.md` exists.
 - Step 3: Always re-run (planning-strategy.json was cleared).
-- Context check: Always present (quick).
-- Step 4: Run in **update** mode for features with existing plans, **create** mode
-  for those without. Never skip.
+- Context checkpoint: Always evaluate (quick).
+- Step 4: Use `.progress.json` to determine which features need create vs update mode
+  and which batch to resume from. Fall back to scanning plan files if no progress file
+  exists.
 - Step 5: Always re-run.
 - Step 6: Skip if `reviews/` directories exist for all features. Re-run if new plans
   were generated or updated in Step 4.

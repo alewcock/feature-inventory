@@ -220,18 +220,120 @@ can start from those files.
 The orchestrator workflows (`create.md`, `plan.md`) specify exact checkpoint locations
 with `### Context Checkpoint` markers. Do not skip them.
 
+### Context Watchdog (Automated Enforcement)
+
+The manual checkpoint protocol is backed by an automated watchdog that monitors context
+health in real time via Claude Code hooks. The watchdog (`scripts/context-watchdog.py`):
+
+1. **Fires on every tool call** (PostToolUse hook) — tracks cumulative tool call count
+   and transcript file size as proxies for context usage.
+2. **Injects warnings into Claude's context** at escalating urgency levels:
+   - **WARN** (30+ tool calls or 300KB+ transcript): "Plan to checkpoint soon"
+   - **CRITICAL** (50+ tool calls or 500KB+ transcript): "Checkpoint NOW"
+   - **BLOCK** (75+ tool calls or 800KB+ transcript): "STOP ALL WORK"
+3. **Blocks agent-spawning tools** (TaskCreate, TeamCreate, SendMessage) at CRITICAL
+   level via a PreToolUse hook. This hard-prevents the orchestrator from starting
+   expensive work that will be lost if the session crashes.
+4. **Resets automatically** on SessionStart (including after `/clear`).
+
+The watchdog is a safety net — the manual checkpoints should catch most situations
+before the watchdog triggers. But if the orchestrator ignores checkpoints or a step
+is unexpectedly expensive, the watchdog will force the issue.
+
+**The watchdog's thresholds are deliberately conservative.** A false "clear now" costs
+seconds (the user clears and resumes). A missed warning costs hundreds of dollars
+in orphaned agents and lost context.
+
 ### Emergency Mid-Step Saves
 
 If at any point during a step the orchestrator senses context is growing dangerously
-(e.g., monitoring a large batch of teammates, or processing many gap-fill cycles):
+(e.g., monitoring a large batch of teammates, or processing many gap-fill cycles),
+OR if the context watchdog emits a CRITICAL or BLOCK warning:
 
 1. **Finish the current sub-step** (e.g., let the current batch complete).
-2. **Write all intermediate state to disk.**
+2. **Write all intermediate state to disk** (including the orchestrator progress file).
 3. **Present the clear mandate** to the user with resume instructions.
 4. **Do NOT start the next sub-step.**
 
 This is an escape valve — it should rarely be needed if checkpoints are respected,
 but it prevents the catastrophic "prompt is too long" crash.
+
+## Orchestrator Progress File
+
+The orchestrator MUST maintain a progress file that tracks exactly where it is in
+the workflow. This enables instant resume after `/clear` without re-scanning all
+output files.
+
+### For `/feature-inventory:create`: `./docs/features/.progress.json`
+
+```json
+{
+  "command": "create",
+  "current_step": "3",
+  "current_substep": "3b",
+  "batch_number": 2,
+  "batches_total": 4,
+  "completed_dimensions": ["api-surface--repo1", "data-models--repo1"],
+  "pending_dimensions": ["ui-screens--repo1", "business-logic--repo1"],
+  "failed_dimensions": [],
+  "gap_fill_cycle": 0,
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+### For `/feature-inventory:plan`: `./docs/plans/.progress.json`
+
+```json
+{
+  "command": "plan",
+  "current_step": "4",
+  "current_substep": "4d",
+  "batch_number": 1,
+  "batches_total": 3,
+  "completed_features": ["cross-cutting", "F-001", "F-002"],
+  "pending_features": ["F-003", "F-004", "F-005"],
+  "failed_features": [],
+  "timestamp": "2024-01-15T14:20:00Z"
+}
+```
+
+### Update Rules
+
+- Update the progress file **after every batch completes**, not just at step boundaries.
+- Update **before and after every context checkpoint**.
+- On resume, read the progress file FIRST — it tells you exactly where to pick up.
+- The progress file is the single source of truth for resume. Output file scanning is
+  a fallback for when no progress file exists (first run or manual recovery).
+
+## Teammate Disk Write Frequency
+
+Teammates run with fresh context windows, but they can still lose work if they crash
+or exhaust their own context. The incremental write pattern (see above) is critical,
+but it needs a concrete frequency target.
+
+### Write Frequency Rules
+
+1. **Write after every 5-10 logical units** (endpoints, models, screens, etc.).
+   Never accumulate more than 10 items in conversation before writing to disk.
+
+2. **Write at least every 3 minutes** of wall-clock time. If a single item takes
+   longer than 3 minutes to analyze (e.g., a very complex function), write what
+   you have so far and continue.
+
+3. **Write immediately after any large file read** (>200 lines). The read content
+   is now in context — extract findings and write them before reading more.
+
+4. **Each write should be self-contained** — if the teammate crashes after this write,
+   the output file should still be valid and usable (even if incomplete). Use the
+   `## INCOMPLETE` marker at the end of partial output.
+
+### Why This Matters
+
+A teammate analyzing a dimension might run for 5-15 minutes. If it writes only at
+the end and crashes at minute 12, ALL work is lost. If it writes every 5 items or
+3 minutes, at most ~3 minutes of work is lost.
+
+**Target: no more than 3 minutes of work should ever be lost from a teammate crash.**
 
 ## Failure Recovery
 

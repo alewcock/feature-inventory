@@ -62,6 +62,51 @@ The strategy is:
 You don't need to hold the whole inventory in context. You just need to hold one
 item at a time and write it out.
 
+## Proportionality Rule
+
+Your analysis depth MUST be proportional to source complexity. A source file with 1,000
+lines of logic cannot be summarized in 3 lines — that's a 333:1 compression ratio and
+means you've lost almost everything.
+
+**Minimum analysis output per source file:**
+
+| Source File Size | Minimum Analysis Lines |
+|-----------------|----------------------|
+| <50 lines | 3 lines |
+| 50-200 lines | 5 lines |
+| 200-500 lines | 10 lines |
+| >500 lines | ceil(source_lines / 50) |
+
+Examples:
+- 538-line file → minimum 11 lines of analysis
+- 1,433-line file → minimum 29 lines of analysis
+- 2,775-line file → minimum 56 lines of analysis
+
+**If you cannot meet the minimum for a file**, do NOT write a shallow stub. Instead:
+1. Write `## INCOMPLETE - {filename} ({source_lines} lines) - requires dedicated pass`
+2. The coverage audit will catch this and re-queue it for a focused agent task.
+
+A shallow stub is worse than an INCOMPLETE marker. The stub looks like coverage but
+contains no useful specification. INCOMPLETE triggers a re-queue; a stub silently
+propagates a gap into the final output.
+
+## Source File Manifest
+
+**At the start of your analysis**, build a manifest of all source files in your scope
+with their line counts. Write it to the top of your output file:
+
+```markdown
+## Source File Manifest
+| File | Lines | Status |
+|------|-------|--------|
+| src/components/UserForm.tsx | 342 | Pending |
+| src/components/Dashboard.tsx | 891 | Pending |
+| ... | ... | ... |
+```
+
+Update the Status column as you process each file (Pending → Done). Before finishing,
+review the manifest: any file still Pending needs analysis or an INCOMPLETE marker.
+
 ## When a Dimension Has Many Items
 
 If a single dimension has 100+ items:

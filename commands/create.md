@@ -182,8 +182,46 @@ Based on discovery AND the user interview, create an analysis plan.
 }
 ```
 
-Skip dimensions that clearly don't apply. For large repos where `split_by_module` is
-true, spawn separate agents per module directory.
+Skip dimensions that clearly don't apply.
+
+### Splitting Strategy
+
+Splitting is critical to prevent context exhaustion. A single agent cannot adequately
+analyze thousands of lines of source code — it will triage and produce shallow stubs.
+Apply these rules:
+
+1. **Per-module split** (`split_by_module: true`): For repos with >500 source files OR
+   any dimension where the relevant source directories total >2,000 lines, split into
+   separate agent tasks per top-level module/directory.
+
+2. **Per-file split**: After identifying the files each agent will analyze, check file
+   sizes. Any individual source file >500 lines gets its own dedicated agent task:
+   ```json
+   {
+     "dimension": "ui-screens",
+     "scope": "src/js/remote/ControlCenter.js",
+     "split_by_module": false,
+     "reason": "Single file, 1433 lines"
+   }
+   ```
+
+3. **Estimating scope**: During discovery (Step 1), collect line counts per directory.
+   Use these to make splitting decisions. When in doubt, split more aggressively —
+   two agents covering 500 lines each produce better output than one agent triaging
+   1,000 lines.
+
+4. **Minimum analysis depth**: Record the total source lines each agent will cover in
+   `plan.json`. This is used by the coverage audit in Step 3.5.
+
+```json
+{
+  "dimension": "ui-screens",
+  "scope": "src/js/remote/pages",
+  "split_by_module": false,
+  "estimated_source_lines": 4200,
+  "files": ["MusicPage.js", "PromotePage.js", "SettingsPage.js", "..."]
+}
+```
 
 Write to `./feature-inventory-output/plan.json`.
 
@@ -249,6 +287,127 @@ If a teammate fails (empty output, error, or context exhaustion):
 4. If empty: re-queue the dimension for the next batch.
 5. After all batches complete, do a cleanup pass: re-spawn teammates for any
    failed/incomplete dimensions.
+
+## Step 3.5: Source Coverage Audit (Mandatory — Blocks Step 4)
+
+**This step is automated and mandatory.** Do NOT skip it. Do NOT proceed to Step 4
+until every gap identified here is resolved.
+
+The raw analysis may have covered some source files thoroughly and others barely at all.
+This step catches the gaps before synthesis, when they're cheapest to fix.
+
+### 3.5a: Build Source File Inventory
+
+For each repo in the plan, enumerate all source files that should have been analyzed:
+
+```bash
+# Get all source files with line counts, sorted by size descending
+find {repo_path} -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" \
+  -o -name "*.py" -o -name "*.rb" -o -name "*.cs" -o -name "*.java" -o -name "*.go" \
+  -o -name "*.vue" -o -name "*.svelte" -o -name "*.php" -o -name "*.razor" \) \
+  ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" \
+  ! -path "*/vendor/*" ! -path "*/__pycache__/*" \
+  | xargs wc -l | sort -rn
+```
+
+### 3.5b: Check Coverage Per File
+
+For each source file >100 lines, check that it appears in the raw output with adequate
+depth:
+
+1. **Grep each filename** (just the basename) across all raw output files for its repo.
+2. **Count the lines of analysis** that reference or describe that file.
+3. **Apply the proportionality threshold:**
+   - Required minimum analysis lines = `ceil(source_lines / 50)`
+   - Example: a 1,433-line file needs at least 29 lines of analysis
+4. **Flag files that fail:**
+   - NO mentions in any raw file → `MISSING`
+   - Mentioned but below threshold → `SHALLOW`
+   - Contains `## INCOMPLETE` marker → `INCOMPLETE`
+
+### 3.5c: Write Coverage Report
+
+Write to `./feature-inventory-output/coverage-audit.json`:
+
+```json
+{
+  "audit_date": "ISO-8601",
+  "total_source_files": 156,
+  "total_source_lines": 48230,
+  "files_over_100_lines": 89,
+  "coverage": {
+    "adequate": 72,
+    "shallow": 8,
+    "missing": 5,
+    "incomplete": 4
+  },
+  "gaps": [
+    {
+      "file": "src/js/remote/ControlCenter.js",
+      "source_lines": 1433,
+      "analysis_lines": 1,
+      "required_lines": 29,
+      "status": "SHALLOW",
+      "relevant_dimensions": ["ui-screens"],
+      "suggested_action": "Re-analyze as dedicated agent task"
+    },
+    {
+      "file": "src/js/remote/PlaylistItemsUI.js",
+      "source_lines": 2775,
+      "analysis_lines": 4,
+      "required_lines": 56,
+      "status": "SHALLOW",
+      "relevant_dimensions": ["ui-screens", "business-logic"],
+      "suggested_action": "Re-analyze as dedicated agent task"
+    }
+  ]
+}
+```
+
+### 3.5d: Re-Queue Gaps
+
+**This is a hard gate.** If there are ANY gaps with status MISSING, SHALLOW, or
+INCOMPLETE:
+
+1. **Do NOT proceed to Step 4.**
+2. For each gap, create a new agent task scoped to that specific file or small group of
+   related files. Use the same dimension analyzer but with a narrow scope:
+   ```
+   scope: "src/js/remote/ControlCenter.js"
+   output_path: "raw/{repo-name}/ui-screens--ControlCenter.md"
+   ```
+3. Spawn gap-filling teammates in batches of up to 5.
+4. After gap-fill agents complete, **re-run the coverage audit** (go back to 3.5b).
+5. Repeat until all files meet the proportionality threshold or are genuinely trivial
+   (orchestrator judgment — a 150-line config file with only constant definitions may
+   legitimately need only 3 lines of analysis).
+6. Only proceed to Step 4 when the coverage report shows 0 gaps, or the orchestrator
+   has reviewed and accepted each remaining gap as legitimate.
+
+### 3.5e: Present Audit Summary
+
+Show the user:
+
+```
+Source Coverage Audit
+=====================
+Total source files: {N} ({total lines})
+Files >100 lines: {N}
+
+Coverage: {adequate}/{total} files adequately analyzed ({%})
+
+Gaps found: {N}
+  - MISSING (not analyzed at all): {N}
+  - SHALLOW (below proportionality threshold): {N}
+  - INCOMPLETE (agent ran out of context): {N}
+
+{If gaps > 0:}
+Re-queuing {N} files for targeted re-analysis...
+{list files and their dimensions}
+
+{If gaps == 0:}
+All source files adequately covered. Proceeding to synthesis.
+```
 
 ## Step 4: Build Feature Hierarchy, Index, and Detail Files
 

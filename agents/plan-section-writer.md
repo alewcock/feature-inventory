@@ -35,6 +35,18 @@ You will receive:
 Write the section file with this structure:
 
 ```markdown
+---
+title: "Section: {section_name}"
+type: feat
+status: active
+date: {YYYY-MM-DD}
+feature_id: {feature_id}
+feature_name: {feature_name}
+section: {section_name}
+depends_on_sections: [{section dependencies}]
+behaviors_covered: {count}
+---
+
 # Section: {section_name}
 
 > Feature: {feature_id} — {feature_name}
@@ -73,12 +85,23 @@ handling approach, configuration.}
 ## Data Model
 
 {If this section involves data model work: entity definitions with field types,
-constraints, relationships, indexes. Schema migration approach.}
+constraints, relationships, indexes. Schema migration approach.
+Omit this section if not applicable.}
 
 ## API Contracts
 
 {If this section involves API work: endpoint definitions with paths, methods,
-request/response shapes, auth requirements, error responses.}
+request/response shapes, auth requirements, error responses.
+Omit this section if not applicable.}
+
+## System-Wide Impact
+
+{Side effects of this section's changes. Trace what callbacks, middleware,
+observers, or event handlers fire when this section's operations execute.
+Can partial failure leave orphaned state (DB rows, cache entries, file handles)?
+What other interfaces (CLI, webhooks, event consumers) need matching changes?
+Keep focused on this section's scope — the parent plan.md has the full
+feature-level analysis.}
 
 ## Tests to Write First (TDD)
 
@@ -98,6 +121,13 @@ implementing the production code.}
 - How to build on existing work without breaking it
 
 If no existing code: "Greenfield implementation — no existing code for these behaviors."}
+
+## Monitoring & Observability
+
+{What metrics, log points, and health checks should be added as part of this
+section's implementation. What counters or gauges should be emitted? What
+should be logged at what level? What failure signals indicate this section's
+functionality is broken? This feeds into post-deploy verification.}
 
 ## Acceptance Criteria
 
@@ -159,8 +189,11 @@ nothing is missed. Use Grep to find relevant sections efficiently.
 ## Completion
 
 After writing the section file, verify:
+- [ ] File starts with YAML frontmatter (title, type, status, date, feature_id, etc.)
 - [ ] File is non-empty and well-structured
 - [ ] All assigned behavior IDs appear in Acceptance Criteria
+- [ ] System-Wide Impact section traces side effects for this section's scope
+- [ ] Monitoring & Observability section defines metrics, logs, and failure signals
 - [ ] TDD stubs cover the key test scenarios
 - [ ] Existing code status is accurately reflected
 - [ ] Section dependencies are listed

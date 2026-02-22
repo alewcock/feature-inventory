@@ -160,6 +160,19 @@ read this single file and understand everything needed.
 ### Structure
 
 ```markdown
+---
+title: "Implementation Plan: {Feature ID} — {Feature Name}"
+type: feat
+status: active
+date: {YYYY-MM-DD}
+feature_id: {Feature ID}
+phase: {N}
+depends_on: [{feature IDs}]
+behaviors: {N}
+sections: {N}
+inventory: "{path to inventory detail file}"
+---
+
 # Implementation Plan: {Feature ID} — {Feature Name}
 
 > Inventory spec: {link to inventory detail file}
@@ -197,6 +210,34 @@ changes from the original API surface.}
 
 {Target UI structure — pages, components, state management. Note any UX changes.}
 
+## System-Wide Impact Analysis
+
+{Trace the side effects and integration points of this feature across the system.
+This section helps implementers and reviewers understand the full blast radius.}
+
+### Interaction Graph
+
+{What callbacks, middleware, observers, hooks, or event handlers fire when this
+feature's operations execute? Trace at least 2 levels deep from each entry point.}
+
+### Error & Failure Propagation
+
+{How do errors from this feature flow across layers? What happens to callers when
+this feature's operations fail? What are the retry, fallback, and degradation
+strategies?}
+
+### State Lifecycle Risks
+
+{Can partial failure leave orphaned state? Database rows without matching records
+in related tables? Stale cache entries? Unreleased locks or file handles? For each
+risk, describe the mitigation strategy.}
+
+### API Surface Parity
+
+{What other interfaces (CLI, internal APIs, webhooks, event consumers) need to
+expose or react to the same operations? Ensure feature changes propagate to all
+entry points, not just the primary API/UI.}
+
 ## Implementation Sections
 
 | # | Section | Focus | Depends On |
@@ -226,6 +267,32 @@ Edge cases and error handling strategy. Integration points with other features.}
 
 {Continue for each section...}
 
+## Monitoring & Observability
+
+{Guidance for what to monitor when this feature is deployed. This section feeds
+directly into post-deploy verification and PR descriptions.}
+
+### Key Metrics
+
+{What counters, gauges, or histograms should be emitted? E.g., request latency,
+error rates per operation, queue depths, cache hit ratios.}
+
+### Log Points
+
+{What should be logged and at what level? Focus on operations that help diagnose
+production issues: key state transitions, external API calls, authorization
+decisions, data mutations.}
+
+### Health Checks
+
+{What endpoint or probe verifies this feature is working? What queries or
+commands validate correct behavior after deployment?}
+
+### Failure Signals & Rollback Triggers
+
+{What metrics or log patterns indicate this feature is broken? What thresholds
+should trigger investigation or rollback?}
+
 ## Migration Notes
 
 {From inventory: complexity flags, known issues, things to do differently.
@@ -247,6 +314,14 @@ Mirrors the plan structure with test stubs for each section. Test stubs are pros
 descriptions or minimal signatures — NOT full test implementations.
 
 ```markdown
+---
+title: "TDD Plan: {Feature ID} — {Feature Name}"
+type: feat
+status: active
+date: {YYYY-MM-DD}
+feature_id: {Feature ID}
+---
+
 # TDD Plan: {Feature ID} — {Feature Name}
 
 ## Testing Framework
@@ -277,6 +352,13 @@ descriptions or minimal signatures — NOT full test implementations.
 ## Section Index (sections/index.md)
 
 ```markdown
+<!-- PROJECT_CONFIG
+runtime: {runtime environment, e.g., node, python-uv, go, rust-cargo}
+test_command: {command to run tests, e.g., npm test, uv run pytest, go test ./...}
+build_command: {command to build, e.g., npm run build, go build ./...}
+lint_command: {command to lint, e.g., npm run lint, ruff check .}
+END_PROJECT_CONFIG -->
+
 <!-- SECTION_MANIFEST
 section-01-data-models
 section-02-business-logic
@@ -314,15 +396,34 @@ Each section file is **completely self-contained**. An implementer reads only th
 file and can start building immediately.
 
 ```markdown
+---
+title: "Section: {section-name}"
+type: feat
+status: active
+date: {YYYY-MM-DD}
+feature_id: {Feature ID}
+feature_name: {Feature Name}
+section: {section-NN-name}
+depends_on_sections: [{section dependencies}]
+behaviors_covered: {count}
+---
+
 # Section: {section-name}
 
 > Feature: {Feature ID} — {Feature Name}
-> Depends on: {section dependencies}
-> Behaviors covered: {list of behavior IDs}
+> Target stack: {key technologies from plan-config}
+> Depends on: {section dependencies, or "None"}
+> Behaviors covered: {count} ({behavior ID range})
 
 ## Context
 
 {What this section implements and why. How it fits into the feature.}
+
+## Architecture
+
+{How the components in this section fit together. Key design decisions and their
+rationale. Interface contracts with other sections (what this section provides,
+what it consumes).}
 
 ## What to Build
 
@@ -330,19 +431,59 @@ file and can start building immediately.
 field types, API endpoints with request/response shapes, business rules with
 edge cases, UI components with state management.}
 
+## Data Model
+
+{If this section involves data model work: entity definitions with field types,
+constraints, relationships, indexes. Schema migration approach.
+Omit this section if not applicable.}
+
+## API Contracts
+
+{If this section involves API work: endpoint definitions with paths, methods,
+request/response shapes, auth requirements, error responses.
+Omit this section if not applicable.}
+
+## System-Wide Impact
+
+{Side effects of this section's changes. What callbacks, middleware, or event
+handlers fire? Can partial failure leave orphaned state? What other interfaces
+need matching changes? Keep this focused on this section's scope.}
+
 ## Tests to Write First (TDD)
 
 {Test stubs from plan-tdd.md for this section only.}
 
+- Test: {description of what to test}
+- Test: {description of what to test}
+{... one stub per test}
+
 ## Existing Code
 
 {If gap analysis detected partial implementation: what exists, what's missing,
-where the existing code is located.}
+where the existing code is located.
+If no existing code: "Greenfield implementation — no existing code for these behaviors."}
+
+## Monitoring & Observability
+
+{What metrics, log points, and health checks should be added as part of this
+section's implementation. What failure signals indicate problems with this
+specific section's functionality.}
 
 ## Acceptance Criteria
 
 {How to verify this section is complete. List every behavior ID and what
 "done" looks like for each.}
+
+- [ ] {behavior_id}: {behavior name} — {what constitutes completion}
+- [ ] {behavior_id}: {behavior name} — {what constitutes completion}
+{... one per behavior}
+
+## Inventory References
+
+{For precise specifications of each behavior (exact validation rules, error messages,
+edge cases, field types), refer to the inventory detail files:}
+
+{List of inventory detail file paths for behaviors in this section}
 ```
 
 ## How AI/Agent Teams Should Use This
@@ -356,3 +497,38 @@ where the existing code is located.}
    d. Implement one section at a time, starting with its TDD stubs
 4. Cross-cutting plans should be implemented before feature-specific work
 5. Reference the original inventory detail files for precise behavior specs
+
+## Compatibility with Implementation Tools
+
+Plan output is designed to work with multiple implementation workflows:
+
+### Compound Engineering (`/workflows:work`)
+
+Each section file can be passed directly to `/workflows:work` as a plan file:
+```
+/workflows:work docs/plans/features/F-001/sections/section-01-data-models.md
+```
+
+The section files include YAML frontmatter, acceptance criteria with checkboxes,
+TDD stubs, and monitoring guidance — all of which `/workflows:work` uses to
+break the section into tasks, run continuous tests, and create PRs with
+post-deploy monitoring sections.
+
+After implementation, use `/workflows:review` to run multi-agent code review,
+and `/workflows:compound` to document solutions for future reference.
+
+### Deep-Implement (`/deep-implement`)
+
+The `sections/index.md` includes `PROJECT_CONFIG` and `SECTION_MANIFEST` blocks
+that `/deep-implement` parses to drive its sequential TDD implementation loop.
+Point it at the sections directory:
+```
+/deep-implement @docs/plans/features/F-001/sections/.
+```
+
+### Direct Agent Usage
+
+Each section file is self-contained — an AI agent reads only that file and can
+start implementing immediately. No prior context needed. The YAML frontmatter
+provides machine-readable metadata, and inventory references link to precise
+behavior specifications.

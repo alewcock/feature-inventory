@@ -1,8 +1,10 @@
 # feature-inventory
 
-**v4.0.0**
+**v4.1.0**
 
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis, then transforms the inventory into fully decomposed, implementation-ready plans for your target architecture.
+
+New in v4.1: **compound engineering compatibility** — plan output now includes YAML frontmatter, `PROJECT_CONFIG` blocks, System-Wide Impact Analysis, and Monitoring & Observability sections. Plans work directly with `/workflows:work` (compound engineering), `/deep-implement`, or any AI agent.
 
 New in v4: **plan generation command** that interviews you about rebuild strategy (motivation, tech stack, architecture, scope), researches the target stack, and produces per-feature implementation plans with TDD stubs and self-contained section files that AI/agent teams can implement directly. All output now organized under `docs/` (`docs/features/`, `docs/gap-analysis/`, `docs/plans/`).
 

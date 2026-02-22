@@ -152,6 +152,8 @@ Write files in this order:
 The main implementation plan. Follow the template in `references/plan-output-format.md`.
 
 Key principles:
+- **Start with YAML frontmatter.** Include title, type, status, date, feature_id,
+  phase, depends_on, behaviors count, sections count, and inventory path.
 - **Write for an unfamiliar reader.** They haven't seen the inventory, the interview,
   or the research. Everything they need is in this file.
 - **Plans are prose, not code.** Use type definitions, function signatures, API shapes,
@@ -160,6 +162,13 @@ Key principles:
   inventory behavior to a plan section. Nothing is dropped.
 - **Include the "why".** Architecture decisions need rationale. An implementer who
   understands WHY will make better local decisions.
+- **Include System-Wide Impact Analysis.** Trace interaction graphs (callbacks,
+  middleware, observers — 2 levels deep), error propagation paths, state lifecycle
+  risks (orphaned state, stale caches), and API surface parity (all interfaces that
+  need matching changes).
+- **Include Monitoring & Observability.** Define key metrics, log points, health
+  checks, and failure signals/rollback triggers. This feeds directly into post-deploy
+  verification and PR descriptions when using workflow tools.
 
 #### 5b: Write `plan-tdd.md`
 
@@ -171,6 +180,8 @@ TDD test stubs mirroring the plan structure. For each section:
 #### 5c: Create `sections/` directory and write `sections/index.md`
 
 The section index with:
+- PROJECT_CONFIG block (runtime, test_command, build_command, lint_command from
+  plan-config.json — parsed by implementation tools)
 - SECTION_MANIFEST block (parsed by tooling)
 - Dependency graph
 - Execution order (which sections can run in parallel)
@@ -301,8 +312,13 @@ Before finishing, verify:
 - [ ] Every behavior ID appears in the behaviors checklist
 - [ ] Every behavior is mapped to a section
 - [ ] Architecture mapping covers data, API, UI, and logic
+- [ ] System-Wide Impact Analysis is present (interaction graph, error propagation,
+  state lifecycle risks, API surface parity)
+- [ ] Monitoring & Observability section is present (metrics, log points, health
+  checks, failure signals)
 - [ ] TDD stubs exist for every section
+- [ ] Section index has PROJECT_CONFIG and SECTION_MANIFEST blocks
 - [ ] Section index has correct dependency graph
-- [ ] Each section file is self-contained
+- [ ] Each section file is self-contained with YAML frontmatter
 - [ ] Existing code status is reflected (if gap analysis exists)
 - [ ] Plan references inventory detail files for precise specs

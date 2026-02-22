@@ -151,6 +151,16 @@ If they have a stack in mind, ask for specifics:
 - Hosting / infrastructure
 - Testing framework preferences
 
+Then ask about project tooling (these feed into section index `PROJECT_CONFIG` blocks
+that implementation tools like `/workflows:work` and `/deep-implement` parse):
+- Runtime environment (e.g., `node`, `python-uv`, `go`, `rust-cargo`, `bun`)
+- Test command (e.g., `npm test`, `uv run pytest`, `go test ./...`)
+- Build command (e.g., `npm run build`, `go build ./...`)
+- Lint command (e.g., `npm run lint`, `ruff check .`)
+
+If they don't know yet, leave these blank — they can be filled in when the project
+is initialized.
+
 If they want research, note this for Step 2.
 
 #### 3. Rebuild Scope
@@ -233,6 +243,12 @@ Write the strategic decisions to `./docs/plans/plan-config.json`:
     "message_queue": "rabbitmq",
     "infrastructure": ["docker", "aws"],
     "testing": ["jest", "playwright"]
+  },
+  "project_tooling": {
+    "runtime": "node",
+    "test_command": "npm test",
+    "build_command": "npm run build",
+    "lint_command": "npm run lint"
   },
   "rebuild_scope": "1:1 | minimum_plus_additions | selective",
   "additional_features": ["list if scope is not 1:1"],
@@ -573,7 +589,10 @@ Next steps:
   1. Review PLAN-INDEX.md for implementation order
   2. Review individual feature plans in docs/plans/features/
   3. Start implementing from Phase 1 using section files
-  4. Each section file is self-contained and ready for an AI agent
+  4. Each section file is self-contained — pass it to:
+     - /workflows:work (compound engineering) for task-based execution
+     - /deep-implement for sequential TDD with code review
+     - Any AI agent as a standalone blueprint
 ```
 
 ## Resume Behavior

@@ -110,29 +110,32 @@ for `synthesis.md` or `planning-strategy.json`.
 
 - **Foreign docs found** (`docs/plans/` exists but no `plan-config.json` with
   our schema, or the schema doesn't match):
-  These were created by another tool, manually, or by an older version. Ask:
+  These were created by another tool, manually, or by an older version.
 
-  ```
-  question: "Found existing planning docs in docs/plans/ that weren't created by this plugin. How should we handle them?"
-  header: "Existing Plans"
-  options:
-    - label: "Use as reference"
-      description: "Read existing plans as context for our planning — useful if they contain good architectural decisions"
-    - label: "Start fresh"
-      description: "Move existing docs to docs/plans-backup/ and generate new plans from the inventory"
-    - label: "Abort"
-      description: "Stop and let me review what's in docs/plans/ first"
-  ```
+  **Review then archive:** Read any `.md` files in `docs/plans/` for context on
+  the existing codebase — architectural decisions, tech stack choices, domain
+  knowledge, and prior planning work are all valuable input. Then move the
+  foreign docs to an archive folder so our plan output has a clean directory:
 
-  If **use as reference**: Read any `.md` files in `docs/plans/` and include
-  relevant context in `synthesis.md` under an "External Planning Context" section.
-  Then create our own plan docs alongside (our files have distinct names).
-
-  If **start fresh**:
   ```bash
-  mv ./docs/plans ./docs/plans-backup-$(date +%Y%m%d-%H%M%S)
-  mkdir -p ./docs/plans
+  mkdir -p ./docs/plans-archive-$(date +%Y%m%d-%H%M%S)
+  mv ./docs/plans/* ./docs/plans-archive-*/
   ```
+
+  Tell the user what was found and where it was archived:
+
+  ```
+  Foreign planning docs found in docs/plans/
+  ===========================================
+  Files: {list of .md files found}
+  Archived to: docs/plans-archive-{timestamp}/
+
+  These docs will be reviewed for context on existing code and
+  architectural decisions, then incorporated into synthesis.md.
+  ```
+
+  Include relevant context from the foreign docs in `synthesis.md` under an
+  "External Planning Context" section during Step 2e.
 
   If **abort**: Stop immediately.
 

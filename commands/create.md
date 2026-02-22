@@ -67,7 +67,7 @@ This is a large-scale analysis task. You MUST manage context carefully:
 3. **If a repo is very large (>500 files), split the agent's work by directory/module.**
    Spawn multiple agents for the same dimension, each scoped to a subtree.
 4. **All agents write their findings to disk immediately.** They do NOT return large
-   payloads in conversation. They write to `./feature-inventory-output/raw/`.
+   payloads in conversation. They write to `./docs/features/raw/`.
 5. **Resume capability:** The orchestrator checks for existing output files before
    spawning agents. If a dimension's output file already exists and is non-empty, skip
    that agent. This means the user can `/clear` and re-run `/feature-inventory` and it
@@ -78,7 +78,7 @@ This is a large-scale analysis task. You MUST manage context carefully:
 Before touching any code, interview the user. Legacy products carry decades of implicit
 knowledge that is not in the code. This step captures it.
 
-If `./feature-inventory-output/interview.md` already exists, read it, summarize what
+If `./docs/features/interview.md` already exists, read it, summarize what
 you already know, and ask only if there are gaps. Don't re-interview.
 
 Be conversational. Adapt follow-up questions based on their answers. When something is
@@ -123,8 +123,8 @@ engineer who's worked on it for years would.
     workarounds, tribal knowledge, external scripts, database jobs defined outside
     the codebase, etc.
 
-Save answers to `./feature-inventory-output/interview.md` and the user-provided
-feature map to `./feature-inventory-output/user-feature-map.md`.
+Save answers to `./docs/features/interview.md` and the user-provided
+feature map to `./docs/features/user-feature-map.md`.
 
 ### Handling Ambiguity During Analysis
 
@@ -132,7 +132,7 @@ Throughout Steps 3-4, agents will flag ambiguities with `[AMBIGUOUS]` tags.
 The orchestrator should:
 1. Collect these as they accumulate.
 2. Present them to the user in batches of 5-10 at natural pause points.
-3. Save resolved answers to `./feature-inventory-output/clarifications.md`.
+3. Save resolved answers to `./docs/features/clarifications.md`.
 4. Feed resolutions back to agents if re-running.
 
 ## Step 1: Discovery
@@ -148,7 +148,7 @@ Determine what you're working with:
    - Identify primary languages and frameworks
    - Identify the rough module/directory structure (top 2 levels)
    - Estimate size category: small (<100 files), medium (100-500), large (500-2000), massive (>2000)
-4. Write discovery results to `./feature-inventory-output/discovery.json`
+4. Write discovery results to `./docs/features/discovery.json`
 5. Cross-check discovery against the user's interview answers. If there are repos or
    components they didn't mention, ask about them.
 
@@ -270,7 +270,7 @@ Apply these rules:
    For example, `src/js/remote/shared/` and `src/js/shared/` each get at least one
    dedicated `ui-screens` and/or `business-logic` agent task.
 
-Write to `./feature-inventory-output/plan.json`.
+Write to `./docs/features/plan.json`.
 
 ## Step 3: Execute Analysis via Agent Teams
 
@@ -286,7 +286,7 @@ Use `TeamCreate` to create a team named "feature-inventory". Enable delegate mod
 
 For each repo and each dimension in the plan:
 
-1. **Check for existing output:** If `./feature-inventory-output/raw/{repo-name}/{dimension}.md`
+1. **Check for existing output:** If `./docs/features/raw/{repo-name}/{dimension}.md`
    (or `{dimension}--{module}.md` for split analyses) exists and is non-empty, skip it.
 2. **Create tasks** via `TaskCreate` for each pending dimension.
 3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE dimension for ONE
@@ -323,7 +323,7 @@ While teammates work:
    collect them.
 3. After each batch completes, verify output files exist and are non-empty.
 4. Present ambiguities to the user in batches of 5-10 for resolution.
-5. Save resolutions to `./feature-inventory-output/clarifications.md`.
+5. Save resolutions to `./docs/features/clarifications.md`.
 
 ### 3d: Handle Failures
 
@@ -349,10 +349,10 @@ Execute the scripted audit:
 
 ```bash
 python3 {plugin_path}/scripts/coverage-audit.py \
-  --plan ./feature-inventory-output/plan.json \
-  --raw-dir ./feature-inventory-output/raw \
-  --details-dir ./feature-inventory-output/details \
-  --output ./feature-inventory-output/coverage-audit.json
+  --plan ./docs/features/plan.json \
+  --raw-dir ./docs/features/raw \
+  --details-dir ./docs/features/details \
+  --output ./docs/features/coverage-audit.json
 ```
 
 The script:
@@ -488,7 +488,7 @@ belongs to which feature area.
    ```
 3. Map each section/group to a major feature area. Build a lightweight mapping:
 
-Write to `./feature-inventory-output/synthesis-plan.json`:
+Write to `./docs/features/synthesis-plan.json`:
 
 ```json
 {
@@ -539,9 +539,9 @@ This mirrors the Step 3 pattern: spawn teammates to do the heavy lifting in para
 Each teammate runs in one of two modes depending on whether prior output exists.
 
 1. **Determine mode for each feature area:**
-   - If `./feature-inventory-output/details/{feature_id}.md` does NOT exist:
+   - If `./docs/features/details/{feature_id}.md` does NOT exist:
      **mode = "create"** — build from scratch.
-   - If `./feature-inventory-output/details/{feature_id}.md` EXISTS:
+   - If `./docs/features/details/{feature_id}.md` EXISTS:
      **mode = "verify"** — audit existing files against raw data and patch gaps.
 
    **Never skip a feature area.** Even if files exist, they may be incomplete. The
@@ -557,7 +557,7 @@ Each teammate runs in one of two modes depending on whether prior output exists.
    - The feature ID, name, and sub-feature list from synthesis-plan.json
    - The section_hints for each sub-feature (so they know where to look in raw files)
    - The raw output path and list of repos
-   - The detail file output path (`./feature-inventory-output/details/`)
+   - The detail file output path (`./docs/features/details/`)
    - The product context (brief summary from interview)
    - A pointer to read `references/context-management.md` before starting
    - For **create mode**, this instruction verbatim: **"For each sub-feature, read from
@@ -725,7 +725,7 @@ For each user response:
 - **Skip** (ambiguities): Mark the ambiguity as `[UNRESOLVED — user unsure]` in the
   detail file. This is honest — downstream agents know not to guess.
 
-Save all resolutions to `./feature-inventory-output/clarifications-features.md` with
+Save all resolutions to `./docs/features/clarifications-features.md` with
 the feature ID, resolution type, and user's explanation for each.
 
 #### 4.5d: Batch Processing
@@ -757,7 +757,7 @@ Proceeding to build the master index...
 
 Once all synthesis teammates have completed:
 
-1. **Enumerate all detail files** produced in `./feature-inventory-output/details/`.
+1. **Enumerate all detail files** produced in `./docs/features/details/`.
    Use `Glob` to find `F-*.md` files.
 
 2. **Build the hierarchy from filenames and file headers.** Read only the first 5-10
@@ -860,11 +860,11 @@ On every run, **auto-clear derived synthesis artifacts** that are always regener
 These are cheap to rebuild and may be stale if raw data changed:
 
 ```bash
-rm -f ./feature-inventory-output/synthesis-plan.json
-rm -f ./feature-inventory-output/coverage-audit.json
-rm -f ./feature-inventory-output/coverage-audit-v2.json
-rm -f ./feature-inventory-output/FEATURE-INDEX.md
-rm -f ./feature-inventory-output/FEATURE-INDEX.json
+rm -f ./docs/features/synthesis-plan.json
+rm -f ./docs/features/coverage-audit.json
+rm -f ./docs/features/coverage-audit-v2.json
+rm -f ./docs/features/FEATURE-INDEX.md
+rm -f ./docs/features/FEATURE-INDEX.json
 ```
 
 **Do NOT clear:**

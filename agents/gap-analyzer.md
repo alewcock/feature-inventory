@@ -20,7 +20,7 @@ task list that humans and AI agents will use to complete the build.
 
 You will receive:
 - `new_project_path`: Path to the new/in-progress project
-- `inventory_path`: Path to the `feature-inventory-output/` directory
+- `inventory_path`: Path to the `docs/features/` directory
 - `feature_id`: The major feature ID you're responsible for (e.g., "F-001")
 - `feature_name`: The major feature name (e.g., "User Management")
 - `sub_features`: List of sub-feature IDs and their behavior IDs

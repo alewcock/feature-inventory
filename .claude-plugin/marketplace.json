@@ -1,8 +1,8 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "feature-inventory",
-  "description": "Reverse-engineers every feature, behavior, and capability across codebases using Agent Teams for parallel analysis",
-  "version": "3.0.0",
+  "description": "Reverse-engineers every feature across codebases using Agent Teams, then generates implementation-ready plans for your target architecture",
+  "version": "4.0.0",
   "owner": {
     "name": "Control Play",
     "url": "https://github.com/alewcock"
@@ -10,8 +10,8 @@
   "plugins": [
     {
       "name": "feature-inventory",
-      "description": "Reverse-engineers every feature, behavior, and capability across one or more codebases using Agent Teams for parallel analysis. Produces a deeply decomposed, hierarchically structured specification designed for AI/agent teams to rebuild the product from scratch. REQUIRES Agent Teams enabled.",
-      "version": "3.0.0",
+      "description": "Reverse-engineers every feature across codebases using Agent Teams for parallel analysis, then generates implementation-ready plans with TDD stubs and self-contained section files. Includes feature inventory, gap analysis, and plan generation. REQUIRES Agent Teams enabled.",
+      "version": "4.0.0",
       "author": {
         "name": "Control Play",
         "url": "https://github.com/alewcock"
@@ -19,7 +19,7 @@
       "source": "./",
       "category": "development",
       "homepage": "https://github.com/alewcock/feature-inventory",
-      "tags": ["migration", "inventory", "feature-extraction", "codebase-analysis", "reverse-engineering", "agent-teams"]
+      "tags": ["migration", "inventory", "feature-extraction", "codebase-analysis", "reverse-engineering", "agent-teams", "implementation-planning", "tdd"]
     }
   ]
 }

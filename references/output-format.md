@@ -5,7 +5,7 @@ The output is structured as a linked hierarchy designed for AI/agent team consum
 ## Directory Structure
 
 ```
-feature-inventory-output/
+docs/features/
 ├── interview.md                    # User interview answers
 ├── user-feature-map.md             # User's mental model of features
 ├── clarifications.md               # Resolved ambiguities

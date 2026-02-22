@@ -64,8 +64,8 @@ The command accepts two arguments:
 
 1. **New project path** (required): Path to the project being built. If not provided,
    prompt the user.
-2. **Inventory path** (optional): Path to the `feature-inventory-output/` directory.
-   Defaults to `./feature-inventory-output/`. If it doesn't exist, tell the user to
+2. **Inventory path** (optional): Path to the `docs/features/` directory.
+   Defaults to `./docs/features/`. If it doesn't exist, tell the user to
    run `/feature-inventory:work` first.
 
 ## Step 0: Validate Inventory
@@ -85,7 +85,7 @@ Scan the new project to understand what exists:
 2. Count files by extension.
 3. Identify key patterns: route definitions, models/schemas, UI components, test files,
    config files, migration files.
-4. Write discovery to `./gap-analysis-output/new-project-discovery.json`.
+4. Write discovery to `./docs/gap-analysis/new-project-discovery.json`.
 
 ## Step 2: Plan Feature Area Assignments
 
@@ -94,7 +94,7 @@ Based on the feature index:
 1. List all major feature areas (F-001, F-002, etc.).
 2. For each, count sub-features and behaviors.
 3. Group into batches of up to 5 for parallel analysis.
-4. Write plan to `./gap-analysis-output/plan.json`:
+4. Write plan to `./docs/gap-analysis/plan.json`:
 
 ```json
 {
@@ -123,7 +123,7 @@ Use `TeamCreate` to create a team named "gap-analysis". Enable delegate mode.
 
 For each major feature area:
 
-1. **Check for existing output:** If `./gap-analysis-output/raw/{feature-id}.md`
+1. **Check for existing output:** If `./docs/gap-analysis/raw/{feature-id}.md`
    exists and is non-empty, skip it.
 2. **Create tasks** via `TaskCreate` for each pending feature area.
 3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE major feature
@@ -133,7 +133,7 @@ For each major feature area:
    - The inventory path
    - The major feature ID and name
    - The list of sub-feature IDs and behavior IDs under this feature
-   - The output file path (`./gap-analysis-output/raw/{feature-id}.md`)
+   - The output file path (`./docs/gap-analysis/raw/{feature-id}.md`)
    - A pointer to read `references/context-management.md` before starting
    - This instruction verbatim: **"For every sub-feature and behavior in your assigned
      feature area, determine its implementation status in the new project: DONE,
@@ -158,11 +158,11 @@ After all teammates complete:
 
 ### 4a: Read all raw gap reports
 
-Read each `./gap-analysis-output/raw/{feature-id}.md` file.
+Read each `./docs/gap-analysis/raw/{feature-id}.md` file.
 
 ### 4b: Build the consolidated gap analysis
 
-Write `./gap-analysis-output/GAP-ANALYSIS.md`:
+Write `./docs/gap-analysis/GAP-ANALYSIS.md`:
 
 ```markdown
 # Gap Analysis
@@ -247,7 +247,7 @@ be approached}
 
 ### 4c: Write JSON version
 
-Write `./gap-analysis-output/GAP-ANALYSIS.json`:
+Write `./docs/gap-analysis/GAP-ANALYSIS.json`:
 
 ```json
 {
@@ -357,9 +357,9 @@ Tasks generated: {N}
 Cross-cutting gaps: {N} patterns identified
 
 Output:
-  - Human-readable: ./gap-analysis-output/GAP-ANALYSIS.md
-  - Machine-readable: ./gap-analysis-output/GAP-ANALYSIS.json
-  - Raw analysis: ./gap-analysis-output/raw/
+  - Human-readable: ./docs/gap-analysis/GAP-ANALYSIS.md
+  - Machine-readable: ./docs/gap-analysis/GAP-ANALYSIS.json
+  - Raw analysis: ./docs/gap-analysis/raw/
 ```
 
 ## Resume Behavior

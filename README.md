@@ -1,8 +1,12 @@
 # feature-inventory
 
-**v3.0.0**
+**v4.1.0**
 
-A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Produces a deeply decomposed, hierarchically structured specification designed for AI/agent teams to rebuild the entire product from scratch.
+A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis, then transforms the inventory into fully decomposed, implementation-ready plans for your target architecture.
+
+New in v4.1: **compound engineering compatibility** — plan output now includes YAML frontmatter, `PROJECT_CONFIG` blocks, System-Wide Impact Analysis, and Monitoring & Observability sections. Plans work directly with `/workflows:work` (compound engineering), `/deep-implement`, or any AI agent. Also adds spec synthesis (interview + research + inventory merged into a unified brief), adaptive analysis with uncertainty mapping, gap-analysis skill integration for existing code detection, and foreign planning doc detection with automatic archiving.
+
+New in v4: **plan generation command** that interviews you about rebuild strategy (motivation, tech stack, architecture, scope), researches the target stack, and produces per-feature implementation plans with TDD stubs and self-contained section files that AI/agent teams can implement directly. All output now organized under `docs/` (`docs/features/`, `docs/gap-analysis/`, `docs/plans/`).
 
 New in v3: user resolution interview phase that eliminates ambiguous, thin, and overlapping features from the inventory through targeted user questions — ensuring every feature is either fully specified, explicitly related, or honestly marked as unresolved.
 
@@ -76,7 +80,8 @@ It interviews the user to capture tribal knowledge, then systematically analyzes
 |---------|-------------|
 | `/feature-inventory:create [path]` | Run the full inventory analysis |
 | `/feature-inventory:gap-analysis [new-project] [inventory-path]` | Compare a new project against the inventory |
-| `/feature-inventory:status` | Check progress of inventory or gap analysis |
+| `/feature-inventory:plan [inventory-path]` | Generate implementation plans from a completed inventory |
+| `/feature-inventory:status` | Check progress of inventory, gap analysis, or plan generation |
 
 ## What It Analyzes (9 Dimensions)
 
@@ -122,13 +127,28 @@ Compares a new or in-progress project against a completed feature inventory. For
 
 Requires a completed feature inventory (`FEATURE-INDEX.json` must exist).
 
+### Generate implementation plans
+
+```
+/feature-inventory:plan [inventory-path]
+```
+
+Transforms a completed feature inventory into implementation-ready plans for your target architecture. Conducts a strategic interview (rebuild motivation, tech stack, architecture, scope), researches the target stack, detects existing code, and produces per-feature plans decomposed into self-contained section files with TDD test stubs.
+
+Requires a completed feature inventory (`FEATURE-INDEX.json` must exist). Optionally integrates with gap analysis results to account for existing implementations.
+
+The plan generation uses Agent Teams at every stage:
+- **Research phase**: Parallel teammates for web research, codebase analysis, and inventory characterization
+- **Plan generation**: Parallel teammates writing feature plans (batches of 5)
+- **Section writing**: Parallel teammates writing implementation sections within each feature
+
 ### Check progress
 
 ```
 /feature-inventory:status
 ```
 
-Shows plugin version, interview status, which dimensions are complete, coverage audit results, synthesis progress, and gap analysis status. Useful after a `/clear` or interruption to see where things stand before resuming.
+Shows plugin version, interview status, which dimensions are complete, coverage audit results, synthesis progress, gap analysis status, and plan generation status. Useful after a `/clear` or interruption to see where things stand before resuming.
 
 ### Resume after interruption
 
@@ -139,7 +159,7 @@ Just run `/feature-inventory:create` again. It detects completed work and picks 
 ### Feature Inventory
 
 ```
-feature-inventory-output/
+docs/features/
 ├── FEATURE-INDEX.md           # Master table of contents (names + links only)
 ├── FEATURE-INDEX.json         # Machine-readable for agent orchestrators
 ├── details/                   # One spec file per feature/behavior
@@ -164,7 +184,7 @@ feature-inventory-output/
 ### Gap Analysis
 
 ```
-gap-analysis-output/
+docs/gap-analysis/
 ├── GAP-ANALYSIS.md            # Human-readable report with task list
 ├── GAP-ANALYSIS.json          # Machine-readable for agent orchestrators
 ├── new-project-discovery.json # New project scan results
@@ -172,6 +192,30 @@ gap-analysis-output/
 └── raw/                       # Per-feature-area gap reports
     ├── F-001.md
     ├── F-002.md
+    └── ...
+```
+
+### Implementation Plans
+
+```
+docs/plans/
+├── PLAN-INDEX.md               # Master plan index with implementation order
+├── PLAN-INDEX.json             # Machine-readable for agent orchestrators
+├── interview.md                # Strategic rebuild interview
+├── plan-config.json            # Tech stack, architecture, scope decisions
+├── research.md                 # Target stack research + existing code analysis
+├── synthesis.md                # Unified brief: interview + research + inventory
+├── planning-strategy.json      # Feature scope, phases, cross-cutting concerns
+└── features/                   # One plan directory per major feature
+    ├── F-001/
+    │   ├── plan.md             # Full implementation plan (prose, not code)
+    │   ├── plan-tdd.md         # TDD test stubs mirroring plan structure
+    │   └── sections/           # Self-contained implementation sections
+    │       ├── index.md        # Section index with dependency graph
+    │       ├── section-01-*.md # Each section: standalone blueprint for an implementer
+    │       └── ...
+    ├── cross-cutting/          # Shared infrastructure plan
+    │   └── ...
     └── ...
 ```
 
@@ -217,6 +261,21 @@ After synthesis, the orchestrator scans all detail files to identify features th
 
 This eliminates the "shallow feature" problem where downstream agents encounter vague specs and either skip them or hallucinate. Every feature in the final index is either fully specified, explicitly related to another feature, or honestly marked as unresolved.
 
+### Plan Generation (Steps 1-8)
+
+Plan generation uses Agent Teams at three levels:
+
+1. **Research Team**: Parallel teammates for web research, gap analysis (via `/feature-inventory:gap-analysis`), and inventory characterization (up to 3 concurrent)
+2. **Plan Writers**: Parallel teammates producing feature plans (batches of 5). Each plan-writer maps inventory behaviors to the target architecture, decomposes into implementation sections, and writes TDD test stubs.
+3. **Section Writers**: Within each plan-writer, parallel teammates writing individual section files (batches of 5). Each section is self-contained — an implementer reads only that file and can start building.
+
+The orchestrator conducts an adaptive strategic interview first (motivation, tech stack, architecture, scope) with uncertainty mapping, then delegates the heavy lifting to teammates. After plans are generated, an optional **external LLM review** step sends plans to Gemini and/or OpenAI for independent critique — catching blind spots that self-review misses.
+
+Plan output is designed to work with multiple implementation tools:
+- **`/workflows:work`** (compound engineering) — task-based execution with multi-agent review
+- **`/deep-implement`** — sequential TDD with code review gates
+- **Any AI agent** — each section file is a standalone blueprint
+
 ## Agents
 
 | Agent | Purpose |
@@ -232,6 +291,8 @@ This eliminates the "shallow feature" problem where downstream agents encounter 
 | `events-analyzer` | Events, payload schemas, subscribers, middleware |
 | `feature-synthesizer` | Cross-references all dimensions to produce detail files (create/verify modes) |
 | `gap-analyzer` | Compares new project against inventory for one feature area |
+| `plan-writer` | Produces implementation plans for one feature area (create/update modes) |
+| `plan-section-writer` | Writes self-contained implementation section files in parallel |
 
 ## Customization
 
@@ -243,11 +304,15 @@ This eliminates the "shallow feature" problem where downstream agents encounter 
 
 ### Adjusting scope
 
-After Step 2, edit `./feature-inventory-output/plan.json` to remove dimensions or adjust directory scopes before continuing.
+After Step 2, edit `./docs/features/plan.json` to remove dimensions or adjust directory scopes before continuing.
 
 ## Token Usage
 
-Agent Teams is token-intensive. Each teammate is a full Claude Code session. For a medium-sized product (3 repos, all 9 dimensions), expect roughly:
+Agent Teams is token-intensive. Each teammate is a full Claude Code session.
+
+### Feature Inventory (create)
+
+For a medium-sized product (3 repos, all 9 dimensions), expect roughly:
 - Interview: ~10k tokens
 - Discovery + Planning: ~20k tokens
 - Analysis (9 dimensions x ~50k each): ~450k tokens across teammates
@@ -256,4 +321,17 @@ Agent Teams is token-intensive. Each teammate is a full Claude Code session. For
 - User resolution interview: ~20-50k tokens (depends on candidate count)
 - Index + validation: ~50k tokens
 
-Total: ~750k-850k tokens. Claude Max subscription recommended.
+Subtotal: ~750k-850k tokens.
+
+### Plan Generation (plan)
+
+For a medium-sized inventory (15 major features, ~400 behaviors):
+- Strategic interview: ~10k tokens
+- Research (parallel teammates): ~100k tokens across teammates
+- Plan generation (15 features x ~80k each): ~1.2M tokens across teammates
+- Section writing (parallel within features): ~300k tokens across teammates
+- Validation + index: ~50k tokens
+
+Subtotal: ~1.6M-1.8M tokens.
+
+**Claude Max subscription strongly recommended.** The combined workflow (create + gap-analysis + plan) can exceed 2.5M tokens for medium products.

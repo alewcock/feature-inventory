@@ -29,7 +29,7 @@ You will receive:
 - `feature_name`: The major feature name (e.g., "User Management")
 - `sub_features`: List of sub-feature names assigned to this feature area
 - `raw_path`: Path to the `raw/` directory containing dimension outputs
-- `output_path`: Path to write detail files (e.g., `feature-inventory-output/details/`)
+- `output_path`: Path to write detail files (e.g., `docs/features/details/`)
 - `repos`: List of repo names (raw files are in `raw/{repo-name}/`)
 - `product_context`: Brief product summary
 - `section_hints`: For each sub-feature, hints about which sections of which raw files

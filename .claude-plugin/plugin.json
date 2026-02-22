@@ -1,11 +1,11 @@
 {
   "name": "feature-inventory",
-  "version": "3.0.0",
-  "description": "Reverse-engineers every feature, behavior, and capability across one or more codebases using Agent Teams for parallel analysis. Produces a deeply decomposed, hierarchically structured specification designed for AI/agent teams to rebuild the product from scratch. Includes gap analysis for comparing new projects against the inventory. REQUIRES Agent Teams enabled.",
+  "version": "4.1.0",
+  "description": "Reverse-engineers every feature across codebases using Agent Teams, then generates implementation-ready plans for your target architecture. Includes feature inventory, gap analysis, and plan generation with TDD stubs and self-contained section files. REQUIRES Agent Teams enabled.",
   "author": {
     "name": "Control Play"
   },
   "license": "MIT",
-  "keywords": ["migration", "inventory", "feature-extraction", "codebase-analysis", "reverse-engineering", "agent-teams", "gap-analysis"],
+  "keywords": ["migration", "inventory", "feature-extraction", "codebase-analysis", "reverse-engineering", "agent-teams", "gap-analysis", "implementation-planning", "tdd"],
   "hooks": "./hooks/hooks.json"
 }

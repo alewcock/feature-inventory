@@ -1,5 +1,5 @@
 # Output directories (generated at runtime, not part of the plugin)
-feature-inventory-output/
+docs/
 
 # OS files
 .DS_Store

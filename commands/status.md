@@ -1,15 +1,15 @@
 ---
 allowed-tools: Bash, Read, Glob, Grep
 description: >
-  Check the current status of a feature inventory or gap analysis run. Shows plugin
-  version, interview status, which dimensions have been completed, coverage audit
-  results, and whether the index has been generated. Useful after a /clear or
-  interruption to see where things stand before resuming.
+  Check the current status of a feature inventory, gap analysis, or plan generation run.
+  Shows plugin version, interview status, which dimensions have been completed, coverage
+  audit results, plan generation progress, and whether indexes have been generated.
+  Useful after a /clear or interruption to see where things stand before resuming.
 ---
 
 # Feature Inventory Status
 
-Check the progress of the current feature inventory analysis.
+Check the progress of the current feature inventory analysis, gap analysis, and plan generation.
 
 ## Steps
 
@@ -17,7 +17,7 @@ Check the progress of the current feature inventory analysis.
    plugin's root directory. If the plugin was installed, use `${CLAUDE_PLUGIN_ROOT}`
    to find it; otherwise check the current working directory or common plugin paths.
 
-2. Check if `./feature-inventory-output/` exists. If not: "No inventory in progress."
+2. Check if `./docs/features/` exists. If not: "No inventory in progress."
 
 3. **Interview status:**
    - `interview.md` exists? If not: "User interview not yet completed."
@@ -30,7 +30,7 @@ Check the progress of the current feature inventory analysis.
    - `plan.json` exists? Report planned dimensions.
 
 6. **Analysis progress:** For each planned repo+dimension, check if the raw output
-   file exists at `./feature-inventory-output/raw/{repo-name}/{dimension}.md`:
+   file exists at `./docs/features/raw/{repo-name}/{dimension}.md`:
    - Non-empty file: DONE (report line count)
    - Empty file: FAILED
    - Missing file: PENDING
@@ -86,9 +86,9 @@ Index: {generated / not generated}
 To resume: run /feature-inventory:create
 ```
 
-12. **Gap analysis status:** Check if `./gap-analysis-output/` exists. If so:
+12. **Gap analysis status:** Check if `./docs/gap-analysis/` exists. If so:
     - `plan.json` exists? Report feature areas planned.
-    - For each planned feature area, check `./gap-analysis-output/raw/{feature-id}.md`:
+    - For each planned feature area, check `./docs/gap-analysis/raw/{feature-id}.md`:
       - Non-empty file: DONE (report line count)
       - Empty file: FAILED
       - Missing file: PENDING
@@ -113,4 +113,47 @@ Areas: {done}/{total} complete, {pending} pending
 Report: {generated / not generated}
 
 To resume: run /feature-inventory:gap-analysis
+```
+
+13. **Plan generation status:** Check if `./docs/plans/` exists. If so:
+    - `interview.md` exists? Report strategic interview status.
+    - `plan-config.json` exists? Report target stack and rebuild scope.
+    - `research.md` exists? Report research status.
+    - `planning-strategy.json` exists? Report features in scope and phases.
+    - For each feature in scope, check `./docs/plans/features/{feature-id}/`:
+      - `plan.md` exists and non-empty? DONE
+      - `plan-tdd.md` exists? TDD stubs written
+      - `sections/index.md` exists? Section index created
+      - Count `sections/section-*.md` files for section progress
+    - Check cross-cutting plan: `./docs/plans/features/cross-cutting/plan.md`
+    - For each feature, check `reviews/` directory for external review files.
+    - `PLAN-INDEX.md` exists? Report.
+    - `PLAN-INDEX.json` exists? Report.
+    - Present plan generation summary:
+
+```
+Plan Generation Status
+======================
+
+Strategic Interview: {complete / not started}
+Target Stack: {language + framework / not configured}
+Rebuild Scope: {1:1 / minimum + additions / selective / not decided}
+Research: {complete / not started}
+Planning Strategy: {created / not created}
+
+Feature Plans:
+| Feature | Plan | TDD | Sections | Review | Status |
+|---------|------|-----|----------|--------|--------|
+| cross-cutting | DONE | DONE | 3/3 | Gemini+OpenAI | Complete |
+| F-001: User Management | DONE | DONE | 4/6 | - | In Progress |
+| F-002: Billing | PENDING | - | - | - | Not Started |
+| ... | ... | ... | ... | ... | ... |
+
+Plans: {done}/{total} complete, {in_progress} in progress, {pending} pending
+Sections: {done}/{total} written
+External Reviews: {N}/{total} reviewed
+
+Plan Index: {generated / not generated}
+
+To resume: run /feature-inventory:plan
 ```

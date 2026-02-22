@@ -6,7 +6,7 @@ producing a structured task list for both human and AI/agent consumption.
 ## Directory Structure
 
 ```
-gap-analysis-output/
+docs/gap-analysis/
 ├── new-project-discovery.json     # New project scan results
 ├── plan.json                      # Analysis plan (feature area assignments)
 ├── raw/                           # Per-feature-area gap reports

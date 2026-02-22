@@ -63,5 +63,34 @@ Ambiguities resolved: {N}
 
 Index: {generated with N detail files / not generated}
 
-To resume: run /feature-inventory
+To resume: run /feature-inventory:work
+```
+
+9. **Gap analysis status:** Check if `./gap-analysis-output/` exists. If so:
+   - `plan.json` exists? Report feature areas planned.
+   - For each planned feature area, check `./gap-analysis-output/raw/{feature-id}.md`:
+     - Non-empty file: DONE (report line count)
+     - Empty file: FAILED
+     - Missing file: PENDING
+   - `GAP-ANALYSIS.md` exists? Report.
+   - `GAP-ANALYSIS.json` exists? Report.
+   - Present gap analysis summary:
+
+```
+Gap Analysis Status
+===================
+
+Plan: {created / not created}
+
+Analysis Progress:
+| Feature Area | Status | Lines |
+|--------------|--------|-------|
+| F-001: User Management | DONE | 312 |
+| F-002: Billing | PENDING | - |
+| ... | ... | ... |
+
+Areas: {done}/{total} complete, {pending} pending
+Report: {generated / not generated}
+
+To resume: run /feature-inventory:gap-analysis
 ```

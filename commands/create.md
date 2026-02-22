@@ -252,46 +252,117 @@ If a teammate fails (empty output, error, or context exhaustion):
 
 ## Step 4: Build Feature Hierarchy, Index, and Detail Files
 
-This is the most important step. The output must be structured so that an AI/agent team
-can pick up any feature and implement it completely.
+This is the most important step and is **parallelized via Agent Teams** just like Step 3.
+The raw dimension files are organized by dimension (API, data models, etc.) but the
+output must be organized by feature. This cross-cutting pivot is too large for a single
+context window — it requires reading from up to 9 dimension files per repo and producing
+hundreds of detail files.
 
-### 4a: Build the Feature Hierarchy
+### 4a: Build the Feature Map (Orchestrator — lightweight scan)
 
-Read all raw output files. Organize every discovered item into a hierarchical tree:
+**Do NOT read all raw files in full.** Instead, skim them to build a mapping of what
+belongs to which feature area.
 
+1. Read `user-feature-map.md` to get the starting skeleton of feature areas.
+2. For each raw dimension file, read **only the section headers and summary** (first
+   30-50 lines, plus any `## Summary` or `### {Group Name}` headers). Use Grep to
+   extract section headers:
+   ```
+   Grep for: "^##" in each raw file to get all section headings
+   ```
+3. Map each section/group to a major feature area. Build a lightweight mapping:
+
+Write to `./feature-inventory-output/synthesis-plan.json`:
+
+```json
+{
+  "feature_areas": [
+    {
+      "id": "F-001",
+      "name": "User Management",
+      "sub_features": [
+        {
+          "name": "User Registration",
+          "section_hints": {
+            "api-surface": ["### Users", "POST /api/users", "POST /api/auth/register"],
+            "data-models": ["### User", "### Account"],
+            "ui-screens": ["### Registration", "### Signup"],
+            "business-logic": ["### Registration", "### User creation"],
+            "auth-and-permissions": ["### Registration", "### Public routes"],
+            "events-and-hooks": ["### user.created", "### user.registered"],
+            "background-jobs": ["### Welcome email"],
+            "integrations": ["### Email provider"],
+            "configuration": ["### Registration", "### SIGNUP_"]
+          }
+        }
+      ]
+    }
+  ]
+}
 ```
-Major Feature (e.g., "User Management")
-├── Sub-Feature (e.g., "User Registration")
-│   ├── Behavior (e.g., "Email format validation")
-│   ├── Behavior (e.g., "Duplicate email check")
-│   ├── Behavior (e.g., "Password strength requirements")
-│   ├── Behavior (e.g., "Welcome email trigger")
-│   ├── Behavior (e.g., "Default role assignment: 'member'")
-│   ├── Behavior (e.g., "Registration rate limiting: 5/min per IP")
-│   └── Behavior (e.g., "Redirect to onboarding after registration")
-├── Sub-Feature (e.g., "User Profile")
-│   ├── Behavior (e.g., "Avatar upload with 5MB limit, JPEG/PNG only")
-│   ├── Behavior (e.g., "Avatar crop to 200x200")
-│   └── ...
-└── ...
-```
 
-Use the user's feature map from the interview as the starting skeleton. Fill in
-everything the code reveals. Add new major features the user didn't mention.
+The `section_hints` are grep patterns / section headers that tell each synthesis
+teammate WHERE to look in each raw file. This prevents teammates from reading entire
+raw files — they can jump to the relevant sections.
 
-**Assign hierarchical IDs:**
-- Major features: `F-001`, `F-002`, ...
-- Sub-features: `F-001.01`, `F-001.02`, ...
-- Behaviors: `F-001.01.01`, `F-001.01.02`, ...
-- Sub-behaviors (if needed): `F-001.01.01a`, `F-001.01.01b`, ...
+4. Assign hierarchical IDs:
+   - Major features: `F-001`, `F-002`, ...
+   - Sub-features: `F-001.01`, `F-001.02`, ...
+   - (Behavior IDs are assigned by the synthesis teammates during decomposition)
 
-### 4b: Write the Index (FEATURE-INDEX.md)
+5. Add any major features discovered in the raw files that the user didn't mention.
+   Cross-reference raw file sections against the user's feature map. Anything unclaimed
+   gets a new feature area or gets assigned to an existing one.
 
-This file is the **table of contents only**. Feature/behavior names and links.
-No inline details. An agent reading this file should be able to understand the
-full scope of the product and navigate to any specific feature.
+**Context budget for 4a:** This step should use minimal context. You're reading headers,
+not content. The synthesis-plan.json is the handoff to teammates.
 
-Write to `./feature-inventory-output/FEATURE-INDEX.md`:
+### 4b: Synthesize Detail Files via Agent Teams (Parallel)
+
+This mirrors the Step 3 pattern: spawn teammates to do the heavy lifting in parallel.
+
+1. **Check for existing output:** If `./feature-inventory-output/details/{feature_id}.md`
+   exists for a feature area, check if its sub-feature and behavior files also exist.
+   If complete, skip that feature area.
+
+2. **Create tasks** via `TaskCreate` for each pending feature area.
+
+3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE major feature area.
+   Assign each the `feature-inventory:feature-synthesizer` agent.
+
+4. **Each teammate receives** via its task description:
+   - The feature ID, name, and sub-feature list from synthesis-plan.json
+   - The section_hints for each sub-feature (so they know where to look in raw files)
+   - The raw output path and list of repos
+   - The detail file output path (`./feature-inventory-output/details/`)
+   - The product context (brief summary from interview)
+   - A pointer to read `references/context-management.md` before starting
+   - This instruction verbatim: **"For each sub-feature, read from ONE raw dimension
+     file at a time using the section hints to find the right location. Extract what
+     you need, then move to the next dimension. After gathering from all dimensions,
+     write the sub-feature detail file and all its behavior detail files. Write each
+     file IMMEDIATELY — do not accumulate. Decompose to atomic behaviors: every
+     validation rule, every error path, every side effect, every default value is its
+     own behavior. If the raw data describes 12 distinct things in a flow, that's 12
+     behaviors, not 1."**
+
+5. **Wait for each batch to finish** before spawning the next.
+
+6. **After each batch:** Verify detail files exist for the completed feature areas.
+   If a teammate failed or produced partial output, re-queue.
+
+### 4c: Build the Index (Orchestrator — after all teammates finish)
+
+Once all synthesis teammates have completed:
+
+1. **Enumerate all detail files** produced in `./feature-inventory-output/details/`.
+   Use `Glob` to find `F-*.md` files.
+
+2. **Build the hierarchy from filenames and file headers.** Read only the first 5-10
+   lines of each detail file (the `# {ID}: {Name}` header and `## Parent` link) to
+   reconstruct the tree. Do NOT re-read full file contents.
+
+3. **Write `FEATURE-INDEX.md`** — table of contents only:
 
 ```markdown
 # Product Feature Index
@@ -359,135 +430,13 @@ and cross-references to related features.
 areas where original implementation was known to be problematic}
 ```
 
-### 4c: Write Detail Files
+4. **Build the dependency graph.** Grep all detail files for `## Dependencies` sections
+   to extract the `Requires` and `Required by` relationships. Build the graph and
+   suggested build order from these.
 
-Create `./feature-inventory-output/details/` directory. For each feature/behavior:
-
-**Major Feature files (F-001.md):**
-
-```markdown
-# F-001: {Major Feature Name}
-
-## Overview
-{What this feature area covers, in plain language. Why it exists.}
-
-## Sub-Features
-| ID | Name | Complexity | Detail |
-|----|------|-----------|--------|
-| F-001.01 | {name} | {low/medium/high} | [spec](./F-001.01.md) |
-| F-001.02 | {name} | {low/medium/high} | [spec](./F-001.02.md) |
-
-## Cross-Cutting Dependencies
-- Auth: {what auth/permissions this feature area requires}
-- Data: {core entities}
-- Integrations: {external services used}
-
-## Implementation Notes for AI/Agent Teams
-{High-level approach, suggested decomposition into tasks, known gotchas}
-```
-
-**Sub-Feature files (F-001.01.md):**
-
-```markdown
-# F-001.01: {Sub-Feature Name}
-
-## Parent
-[F-001: {Major Feature Name}](./F-001.md)
-
-## Overview
-{What this sub-feature does, why it exists, who uses it}
-
-## Behaviors
-| ID | Behavior | Detail |
-|----|----------|--------|
-| F-001.01.01 | {name} | [spec](./F-001.01.01.md) |
-| F-001.01.02 | {name} | [spec](./F-001.01.02.md) |
-
-## Data Model
-{Full entity definitions with every field, type, constraint, default, index}
-{Use actual schema notation the implementing agent can work from}
-
-## API Contracts
-{For each endpoint: method, path, request schema, response schema, status codes,
-error response format, rate limits, pagination}
-
-## UI Specification
-{Screens involved, form fields, validation messages, loading states, empty states,
-error states, responsive behavior, sort/filter options}
-
-## Business Rules
-{Every rule as a numbered list. Conditions, actions, edge cases.}
-
-## Events
-{Events emitted and consumed, with payload schemas}
-
-## Dependencies
-- Requires: {feature IDs}
-- Required by: {feature IDs}
-- External: {services}
-
-## Configuration
-{Env vars, feature flags, settings that affect behavior}
-
-## Auth
-{Required permissions, role checks}
-
-## Original Source Locations
-{File paths and line ranges in original codebase}
-
-## Test Specification
-{What an implementing agent should test: happy paths, edge cases, error conditions,
-integration points}
-
-## Implementation Notes for AI/Agent Teams
-{Suggested approach, tricky parts, performance considerations, things the original
-got wrong that the rebuild should fix (from user interview)}
-```
-
-**Behavior files (F-001.01.01.md):**
-
-```markdown
-# F-001.01.01: {Behavior Name}
-
-## Parent
-[F-001.01: {Sub-Feature Name}](./F-001.01.md)
-
-## Behavior
-{Precise, unambiguous description. An AI agent reading only this section should
-know exactly what to implement.}
-
-## Input
-{Exact fields, types, constraints. Use TypeScript-style type notation or similar.}
-
-## Logic
-{Step-by-step. Pseudocode for anything non-trivial. Every conditional branch.}
-
-## Output / Side Effects
-{Return values, database writes, events fired, emails sent, cache updates}
-
-## Edge Cases
-{Every edge case found in the code, numbered}
-
-## Error States
-{Every error condition: what triggers it, error code/message, how it's surfaced}
-
-## Defaults
-{Every default value used}
-
-## Original Source
-`{file_path}:{line_start}-{line_end}`
-
-## Test Cases
-{Concrete test cases the implementing agent should write}
-1. Given {input}, expect {output}
-2. Given {edge case}, expect {behavior}
-3. Given {error condition}, expect {error response}
-```
-
-### 4d: Write JSON version
-
-Write `./feature-inventory-output/FEATURE-INDEX.json` with the full structured hierarchy
-for programmatic consumption by agent orchestrators.
+5. **Write `FEATURE-INDEX.json`** with the full structured hierarchy for programmatic
+   consumption by agent orchestrators. Build this from the enumerated detail files and
+   dependency graph — do NOT re-read full file contents.
 
 ## Step 5: Validation & Summary
 
@@ -506,4 +455,7 @@ If re-run after `/clear` or interruption:
 - Step 1: Re-run unless `discovery.json` exists.
 - Step 2: Re-run unless `plan.json` exists and discovery hasn't changed.
 - Step 3: Skip completed dimensions (check raw output files).
-- Step 4: Always re-run to regenerate from all available raw files.
+- Step 4a: Re-run unless `synthesis-plan.json` exists and all raw files are present.
+- Step 4b: Skip feature areas whose detail files are already complete (check for
+  major feature file + all expected sub-feature files).
+- Step 4c: Always re-run to regenerate index from all available detail files.

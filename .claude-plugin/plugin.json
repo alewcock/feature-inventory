@@ -1,6 +1,6 @@
 {
   "name": "feature-inventory",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "description": "Reverse-engineers every feature across codebases using Agent Teams, then generates implementation-ready plans for your target architecture. Includes feature inventory, gap analysis, plan generation with TDD stubs and self-contained section files, and marketing catalog generation for go-to-market teams. REQUIRES Agent Teams enabled.",
   "author": {
     "name": "Control Play"

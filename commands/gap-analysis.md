@@ -142,6 +142,10 @@ For each major feature area:
      context for an implementer to start working. Reference the inventory detail file
      for full specifications."**
 5. **Wait for the batch to finish** before spawning the next batch.
+6. **Batch-level hard stop (every 2 batches).** After completing every 2nd batch,
+   the orchestrator MUST perform a hard stop. See `references/context-management.md`
+   § "Batch-Level Hard Stop Protocol." Update `.progress.json` (or scan raw output
+   files for resume) so the command resumes at the next batch when re-invoked.
 
 Use Sonnet for teammates. The lead (Opus) handles coordination and the final merge.
 
@@ -362,11 +366,36 @@ Output:
   - Raw analysis: ./docs/gap-analysis/raw/
 ```
 
+### Orchestrator Progress File
+
+Maintain `./docs/gap-analysis/.progress.json` throughout the workflow:
+
+```json
+{
+  "command": "gap-analysis",
+  "current_step": "3",
+  "batch_number": 2,
+  "batches_total": 4,
+  "completed_features": ["F-001", "F-002", "F-003"],
+  "pending_features": ["F-004", "F-005"],
+  "failed_features": [],
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+Update after every batch completes. On resume, read this FIRST.
+
 ## Resume Behavior
+
+On every run, first **check for `.progress.json`**. If it exists, read it to determine
+exactly where the previous run stopped. Fall back to scanning raw output files if no
+progress file exists.
 
 If re-run after `/clear` or interruption:
 - Step 0: Always validate inventory (quick).
 - Step 1: Skip if `new-project-discovery.json` exists.
 - Step 2: Skip if `plan.json` exists.
-- Step 3: Skip completed feature areas (check raw output files).
+- Step 3: Use `.progress.json` to skip completed feature areas and resume from the
+  exact batch that was in progress. Fall back to scanning raw output files if no
+  progress file exists.
 - Step 4: Always re-run to regenerate merged output from all raw files.

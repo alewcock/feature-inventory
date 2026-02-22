@@ -58,7 +58,12 @@ with complete schemas, types, rules, and edge cases. No hand-waving.
 
 ## Important: Context Window Management
 
-This is a large-scale analysis task. You MUST manage context carefully:
+**A "prompt is too long" error is CATASTROPHIC.** It kills the orchestrator session,
+orphans any running teammates, and loses all context accumulated during the run. This
+workflow spans many steps and can run for hours — the orchestrator MUST proactively
+manage its context to prevent this.
+
+### Core Rules
 
 1. **Never load entire codebases into context.** Use `Grep`, `Glob`, and targeted `Read`
    to sample and scan. Delegate deep analysis to sub-agents.
@@ -72,6 +77,50 @@ This is a large-scale analysis task. You MUST manage context carefully:
    spawning agents. If a dimension's output file already exists and is non-empty, skip
    that agent. This means the user can `/clear` and re-run `/feature-inventory` and it
    picks up where it left off.
+
+### Batch-Level Hard Stops (Primary Protection)
+
+**During any step that dispatches agent batches (Steps 3, 3.5, 4b), the orchestrator
+MUST perform a hard stop after every 2 completed batches.** This means: save all state
+to `.progress.json`, print a checkpoint message with resume instructions, and **STOP.**
+Do not continue. The user will `/compact` or `/clear` and re-run the command.
+
+This is the most important context management mechanism. See
+`references/context-management.md` § "Batch-Level Hard Stop Protocol" for the full
+procedure. The VS Code context percentage UI does **not** update during a long-running
+turn — the user has zero visibility into context health while the orchestrator is
+running. Hard stops give the user regular opportunities to check and manage context.
+
+### Step-Boundary Checkpoints
+
+**This workflow also has checkpoints at every step boundary.** At each checkpoint, the
+orchestrator MUST evaluate its context health and clear if needed. See
+`references/context-management.md` § "Context Checkpoint Protocol" for the full
+protocol.
+
+Checkpoints are marked with `### Context Checkpoint` headers throughout this document.
+**Do not skip them.** Each checkpoint is a safe resume point — all prior state is on
+disk and the next step can start from those files.
+
+**The orchestrator should expect to `/compact` or `/clear` many times during a full
+inventory run.** This is normal and by design. The alternative — hitting "prompt is
+too long" — is catastrophic and unrecoverable.
+
+### Automated Context Watchdog
+
+A PostToolUse hook (`scripts/context-watchdog.py`) monitors context health in real time.
+It tracks tool call count and transcript size, injecting escalating warnings into the
+orchestrator's context. At critical levels, it BLOCKS agent-spawning tools (TaskCreate,
+TeamCreate, SendMessage) to prevent starting work that will be lost.
+
+**If you see a watchdog warning, treat it like a fire alarm.** Save state and checkpoint.
+See `references/context-management.md` § "Context Watchdog" for details.
+
+### Orchestrator Progress File
+
+Maintain `./docs/features/.progress.json` throughout the workflow. Update it after every
+batch completes. On resume, read it FIRST to know exactly where to pick up. See
+`references/context-management.md` § "Orchestrator Progress File" for the schema.
 
 ## Step 0: User Interview
 
@@ -135,6 +184,16 @@ The orchestrator should:
 3. Save resolved answers to `./docs/features/clarifications.md`.
 4. Feed resolutions back to agents if re-running.
 
+### Context Checkpoint: After Interview
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+All interview state is on disk (`interview.md`, `user-feature-map.md`). If the interview
+was lengthy (many follow-up questions, complex product), context may already be significant.
+Evaluate and clear if needed — Step 1 resumes from `discovery.json` detection.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`
+
 ## Step 1: Discovery
 
 Determine what you're working with:
@@ -151,6 +210,16 @@ Determine what you're working with:
 4. Write discovery results to `./docs/features/discovery.json`
 5. Cross-check discovery against the user's interview answers. If there are repos or
    components they didn't mention, ask about them.
+
+### Context Checkpoint: After Discovery
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+Discovery results are on disk (`discovery.json`). If the codebase was large and required
+extensive structural scanning, clear before planning. Step 2 resumes from `plan.json`
+detection.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`, `discovery.json`
 
 ## Step 2: Plan
 
@@ -210,12 +279,19 @@ Record these as `deduplicate_paths` so the audit only checks one copy.
 
 ### Splitting Strategy
 
-Splitting is critical to prevent context exhaustion. A single agent cannot adequately
-analyze thousands of lines of source code — it will triage and produce shallow stubs.
+Splitting is critical to prevent context exhaustion AND to keep teammate runtime short.
+A single agent cannot adequately analyze thousands of lines of source code — it will
+triage and produce shallow stubs. Long-running teammates also risk their own context
+limits and delay the overall workflow.
+
+**Target: each teammate should complete in ~5 minutes.** If a task would take longer,
+split it further. More smaller tasks = more frequent progress saves, less work lost
+on failure, and faster batch turnaround for the orchestrator.
+
 Apply these rules:
 
 1. **Per-module split** (`split_by_module: true`): For repos with >500 source files OR
-   any dimension where the relevant source directories total >2,000 lines, split into
+   any dimension where the relevant source directories total >1,500 lines, split into
    separate agent tasks per top-level module/directory.
 
 2. **Per-file split**: After identifying the files each agent will analyze, check file
@@ -229,7 +305,12 @@ Apply these rules:
    }
    ```
 
-3. **Estimating scope**: During discovery (Step 1), collect line counts per directory.
+3. **Max scope per teammate**: No single teammate task should cover more than ~1,500
+   lines of source code. If a module or directory exceeds this, split it further by
+   subdirectory or by file groups. Two teammates covering 750 lines each produce
+   better output — and finish faster — than one teammate covering 1,500 lines.
+
+4. **Estimating scope**: During discovery (Step 1), collect line counts per directory.
    Use these to make splitting decisions. When in doubt, split more aggressively —
    two agents covering 500 lines each produce better output than one agent triaging
    1,000 lines.
@@ -272,6 +353,17 @@ Apply these rules:
 
 Write to `./docs/features/plan.json`.
 
+### Context Checkpoint: After Planning
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+The analysis plan is on disk (`plan.json`). Step 3 (agent team execution) is the most
+context-intensive phase — monitoring batches of teammates will rapidly consume context.
+**Strongly recommend clearing here** to enter Step 3 with maximum headroom.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`discovery.json`, `plan.json`
+
 ## Step 3: Execute Analysis via Agent Teams
 
 Create an Agent Team for the analysis. You (the lead) coordinate. Teammates do the
@@ -309,8 +401,26 @@ For each repo and each dimension in the plan:
      every default value, every edge case, every validation rule, every error message,
      every timeout, every sort order, every conditional branch. If you can see it in the
      code, document it. Flag anything ambiguous with [AMBIGUOUS]. This output will be
-     the sole reference for an AI agent team rebuilding this feature from scratch."**
+     the sole reference for an AI agent team rebuilding this feature from scratch.
+     IMPORTANT: Write findings to disk every 5-10 items — never accumulate more than
+     10 items before writing. If you crash, only the unwritten items should be lost."**
 5. **Wait for the batch to finish** before spawning the next batch.
+6. **Update `.progress.json`** after each batch completes with the list of completed
+   and pending dimensions.
+7. **Batch-level hard stop (every 2 batches).** After completing every 2nd batch,
+   the orchestrator MUST perform a hard stop. See `references/context-management.md`
+   § "Batch-Level Hard Stop Protocol" for the full procedure. In brief:
+   - Update `.progress.json` with all completed/pending/failed dimensions
+   - Verify all output files from completed batches exist and are non-empty
+   - Print the batch checkpoint message (completed count, remaining count,
+     resume instructions)
+   - **STOP.** Do not start the next batch. Do not continue any other work.
+   - The user will `/compact` or `/clear` and re-run. The command resumes from
+     `.progress.json` at the next batch.
+
+   **This is not optional.** A codebase with 100+ agent tasks across 20 batches will
+   exhaust context long before all batches complete if the orchestrator runs
+   continuously. The 2-batch cadence ensures the user can manage context health.
 
 Use Sonnet for teammates where possible to manage token costs. The lead (Opus) handles
 coordination and the final merge/index generation.
@@ -322,8 +432,9 @@ While teammates work:
 2. When teammates flag `[AMBIGUOUS]` items (via `SendMessage` or in their output files),
    collect them.
 3. After each batch completes, verify output files exist and are non-empty.
-4. Present ambiguities to the user in batches of 5-10 for resolution.
-5. Save resolutions to `./docs/features/clarifications.md`.
+4. **Update `.progress.json`** with completed/pending/failed dimensions.
+5. Present ambiguities to the user in batches of 5-10 for resolution.
+6. Save resolutions to `./docs/features/clarifications.md`.
 
 ### 3d: Handle Failures
 
@@ -334,6 +445,21 @@ If a teammate fails (empty output, error, or context exhaustion):
 4. If empty: re-queue the dimension for the next batch.
 5. After all batches complete, do a cleanup pass: re-spawn teammates for any
    failed/incomplete dimensions.
+
+### Context Checkpoint: After Analysis Execution
+
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
+in `references/context-management.md`.
+
+Step 3 involves monitoring multiple batches of teammates, collecting ambiguities, handling
+failures, and re-queuing — this is the single largest context consumer in the entire
+workflow. After completing Step 3, the orchestrator's context is almost certainly heavy.
+
+**Clear here.** All analysis output is on disk in `raw/`. The coverage audit (Step 3.5)
+starts fresh from those files.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`discovery.json`, `plan.json`, `raw/*` (all dimension outputs)
 
 ## Step 3.5: Source Coverage Audit (Mandatory — Blocks Step 4)
 
@@ -422,7 +548,11 @@ Filling {N} gaps in {ceil(N/5)} batches...
    output_path: "raw/{repo-name}/ui-screens--ControlCenter.md"
    ```
 4. Spawn gap-filling teammates in batches of up to 5.
-5. After gap-fill agents complete, **re-run the coverage audit script** (go back to 3.5a).
+5. **Batch-level hard stop applies here too.** Gap-fill batches count toward the
+   2-batch cadence. If this is the 2nd batch since the last hard stop (including
+   batches from Step 3), perform the hard stop procedure. See
+   `references/context-management.md` § "Batch-Level Hard Stop Protocol."
+6. After gap-fill agents complete, **re-run the coverage audit script** (go back to 3.5a).
 
 ### 3.5d: Cap Gap-Fill Cycles
 
@@ -465,6 +595,20 @@ Re-queuing {N} files for targeted re-analysis...
 {If gaps == 0:}
 All source files adequately covered. Proceeding to synthesis.
 ```
+
+### Context Checkpoint: After Coverage Audit
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+The coverage audit may have involved multiple gap-fill cycles (up to 3), each spawning
+agent batches and re-running the audit script. If ANY gap-fill cycles were needed,
+context is heavy — **clear before Step 4.**
+
+Even if no gap-fill was needed, evaluate context from the audit triage and user
+interactions. Step 4 spawns another round of agent teams and must have sufficient headroom.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`discovery.json`, `plan.json`, `raw/*`, `coverage-audit.json`
 
 ## Step 4: Build Feature Hierarchy, Index, and Detail Files
 
@@ -580,8 +724,29 @@ Each teammate runs in one of two modes depending on whether prior output exists.
 
 5. **Wait for each batch to finish** before spawning the next.
 
-6. **After each batch:** Verify detail files exist for the completed feature areas.
+6. **Batch-level hard stop (every 2 batches).** After completing every 2nd batch
+   of synthesis work, perform the hard stop procedure. See
+   `references/context-management.md` § "Batch-Level Hard Stop Protocol."
+   Update `.progress.json` with completed/pending features and the current batch
+   number so the command resumes at the right point.
+
+7. **After each batch:** Verify detail files exist for the completed feature areas.
    If a teammate failed or produced partial output, re-queue.
+
+### Context Checkpoint: After Synthesis
+
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
+in `references/context-management.md`.
+
+Step 4a-4b involved building the feature map (reading headers from all raw files) and
+monitoring synthesis teammates in batches. This is another heavy context consumer.
+
+**Clear here.** All synthesis output is on disk in `details/`. Step 4.5 (resolution
+interview) scans detail files and interacts with the user — it needs headroom.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`discovery.json`, `plan.json`, `raw/*`, `coverage-audit.json`,
+`synthesis-plan.json`, `details/*`
 
 ### 4.5: User Resolution Interview (Mandatory — Blocks 4c)
 
@@ -753,6 +918,18 @@ Resolution Summary:
 Proceeding to build the master index...
 ```
 
+### Context Checkpoint: After Resolution Interview
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+The resolution interview involved scanning detail files, presenting candidates to the user
+in batches, and applying resolutions (edits, merges, deletions). If there were many
+resolution candidates, context is heavy. Evaluate and clear if needed.
+
+Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
+`clarifications-features.md`, `discovery.json`, `plan.json`, `raw/*`,
+`coverage-audit.json`, `synthesis-plan.json`, `details/*` (with resolutions applied)
+
 ### 4c: Build the Index (Orchestrator — after all teammates finish)
 
 Once all synthesis teammates have completed:
@@ -856,7 +1033,11 @@ areas where original implementation was known to be problematic}
 
 ## Resume Behavior
 
-On every run, **auto-clear derived synthesis artifacts** that are always regenerated.
+On every run, first **check for `.progress.json`**. If it exists, read it to determine
+exactly where the previous run stopped. This is faster and more reliable than scanning
+output files.
+
+Then **auto-clear derived synthesis artifacts** that are always regenerated.
 These are cheap to rebuild and may be stale if raw data changed:
 
 ```bash
@@ -868,6 +1049,7 @@ rm -f ./docs/features/FEATURE-INDEX.json
 ```
 
 **Do NOT clear:**
+- `.progress.json` — the orchestrator's resume state (cleared only after Step 5 completes)
 - `details/` — verify mode patches these incrementally; clearing forces a full rebuild
 - `raw/` — the expensive analysis output
 - `interview.md`, `user-feature-map.md`, `clarifications.md`, `clarifications-features.md` — user input
@@ -877,12 +1059,14 @@ Then apply these resume rules:
 - Step 0: Skip if `interview.md` exists (load it for context).
 - Step 1: Re-run unless `discovery.json` exists.
 - Step 2: Re-run unless `plan.json` exists and discovery hasn't changed.
-- Step 3: Skip completed dimensions (check raw output files).
+- Step 3: Use `.progress.json` to skip completed dimensions and resume from the
+  exact batch that was in progress. Fall back to scanning raw output files if no
+  progress file exists.
 - Step 3.5: Always re-run **using the scripted audit** (`scripts/coverage-audit.py`),
   not LLM interpretation. The derived files were already cleared above.
 - Step 4a: Always re-run (synthesis-plan.json was cleared).
-- Step 4b: Run in **verify** mode for feature areas with existing detail files,
-  **create** mode for those without. Never skip.
+- Step 4b: Use `.progress.json` to determine which feature areas need create vs verify
+  mode. Fall back to scanning detail files if no progress file exists.
 - Step 4.5: Skip if `clarifications-features.md` exists — resolutions are already
   applied to detail files. If detail files were regenerated (4b ran in create mode
   for any feature), re-run 4.5 for those features only.

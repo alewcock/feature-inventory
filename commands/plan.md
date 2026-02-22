@@ -47,8 +47,12 @@ but no full function bodies.
 
 ## Important: Context Window Management
 
-Plan generation reads from the feature inventory AND produces substantial output.
-Manage context carefully:
+**A "prompt is too long" error is CATASTROPHIC.** It kills the orchestrator session,
+orphans any running teammates, and loses all context accumulated during the run. This
+workflow spans many steps and can run for hours — the orchestrator MUST proactively
+manage its context to prevent this.
+
+### Core Rules
 
 1. **Never load the full inventory into context.** Use the FEATURE-INDEX.json for
    structure, read detail files one at a time.
@@ -58,6 +62,49 @@ Manage context carefully:
    payloads in conversation.
 4. **Resume capability:** Check for existing plan output files before spawning
    agents. Skip completed areas.
+
+### Batch-Level Hard Stops (Primary Protection)
+
+**During Step 4 (plan generation), the orchestrator MUST perform a hard stop after
+every 2 completed batches of plan-writer teammates.** This means: save all state to
+`.progress.json`, print a checkpoint message with resume instructions, and **STOP.**
+Do not continue. The user will `/compact` or `/clear` and re-run the command.
+
+This is the most important context management mechanism. See
+`references/context-management.md` § "Batch-Level Hard Stop Protocol" for the full
+procedure. The VS Code context percentage UI does **not** update during a long-running
+turn — the user has zero visibility into context health while the orchestrator is
+running. Hard stops give the user regular opportunities to check and manage context.
+
+### Step-Boundary Checkpoints
+
+**This workflow also has checkpoints at every step boundary.** At each checkpoint, the
+orchestrator MUST evaluate its context health and clear if needed. See
+`references/context-management.md` § "Context Checkpoint Protocol" for the full
+protocol.
+
+Checkpoints are marked with `### Context Checkpoint` headers throughout this document.
+**Do not skip them.** Each checkpoint is a safe resume point — all prior state is on
+disk and the next step can start from those files.
+
+**The orchestrator should expect to `/compact` or `/clear` multiple times during a full
+plan generation run.** This is normal and by design.
+
+### Automated Context Watchdog
+
+A PostToolUse hook (`scripts/context-watchdog.py`) monitors context health in real time.
+It tracks tool call count and transcript size, injecting escalating warnings into the
+orchestrator's context. At critical levels, it BLOCKS agent-spawning tools (TaskCreate,
+TeamCreate, SendMessage) to prevent starting work that will be lost.
+
+**If you see a watchdog warning, treat it like a fire alarm.** Save state and checkpoint.
+See `references/context-management.md` § "Context Watchdog" for details.
+
+### Orchestrator Progress File
+
+Maintain `./docs/plans/.progress.json` throughout the workflow. Update it after every
+batch completes. On resume, read it FIRST to know exactly where to pick up. See
+`references/context-management.md` § "Orchestrator Progress File" for the schema.
 
 ## Inputs
 
@@ -335,6 +382,16 @@ Write the strategic decisions to `./docs/plans/plan-config.json`:
 }
 ```
 
+### Context Checkpoint: After Strategic Interview
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+All interview state is on disk (`interview.md`, `plan-config.json`). If the interview
+was lengthy, evaluate context and clear if needed — Step 2 resumes from `research.md`
+detection.
+
+Preserved files: `interview.md`, `plan-config.json`
+
 ## Step 2: Create Agent Team & Execute Research
 
 Create the Agent Team that will be used throughout the planning process. Then use
@@ -487,6 +544,16 @@ read `synthesis.md` + `plan-config.json` instead of separately reading interview
 research, and inventory overview files. This reduces context usage per teammate
 and ensures consistent interpretation across all feature plans.
 
+### Context Checkpoint: After Research & Synthesis
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+Research involved monitoring teammates and merging their outputs. Synthesis involved
+reading and reconciling multiple documents. All results are on disk (`research.md`,
+`synthesis.md`). Evaluate context and clear if needed.
+
+Preserved files: `interview.md`, `plan-config.json`, `research.md`, `synthesis.md`
+
 ## Step 3: Create Planning Strategy
 
 Based on the synthesis, research, and inventory, create the planning approach.
@@ -559,24 +626,18 @@ Write `./docs/plans/planning-strategy.json`:
 }
 ```
 
-## Context Check: Before Plan Generation
+### Context Checkpoint: Before Plan Generation
 
-Plan generation (Step 4) spawns many teammates and can take significant time. Before
-proceeding, check your context usage. If you've consumed substantial context through
-the interview, research, and strategy steps, inform the user:
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
+in `references/context-management.md`.
 
-```
-Context check: Steps 1-3 complete. Step 4 (plan generation) will spawn
-{N} plan-writer teammates. This is the most expensive step.
+Steps 1-3 have accumulated interview interactions, research monitoring, document reads,
+and strategy generation. Step 4 (plan generation) is the most context-intensive phase —
+it monitors multiple batches of plan-writer teammates. **Clear here** to enter Step 4
+with maximum headroom.
 
-Options:
-  1. Continue — proceed with plan generation
-  2. /clear + re-run — fresh context, resumes from Step 3 (interview,
-     research, and config are preserved on disk)
-```
-
-The user can choose. Either way, the orchestrator proceeds correctly thanks to
-file-based resume detection.
+Preserved files: `interview.md`, `plan-config.json`, `research.md`, `synthesis.md`,
+`planning-strategy.json`
 
 ## Step 4: Generate Feature Plans via Agent Teams
 
@@ -640,8 +701,29 @@ For each feature in scope:
      TDD test stubs, system-wide impact analysis, and monitoring guidance. Plans
      are prose — no full code implementations. Flag any [UNCERTAIN] areas from
      synthesis.md that affect this feature. Write files to disk immediately as
-     you complete each one."**
+     you complete each one — write plan.md first, then each section file
+     individually. Never accumulate more than one section in context before
+     writing it to disk."**
 5. **Wait for each batch to finish** before spawning the next.
+6. **Update `.progress.json`** after each batch with completed/pending/failed features.
+7. **Batch-level hard stop (every 2 batches).** After completing every 2nd batch,
+   the orchestrator MUST perform a hard stop. See `references/context-management.md`
+   § "Batch-Level Hard Stop Protocol" for the full procedure. In brief:
+   - Update `.progress.json` with all completed/pending/failed features and the
+     current batch number
+   - Verify plan files from completed batches exist (plan.md, plan-tdd.md, sections/)
+   - Print the batch checkpoint message with resume instructions
+   - **STOP.** Do not start the next batch. The user will `/compact` or `/clear`
+     and re-run. The command resumes from `.progress.json`.
+
+   **This is critical for large inventories.** A product with 15+ major features
+   means 3+ batches of plan-writers, each with nested section-writer sub-teams.
+   Context accumulates fast from monitoring these multi-level agent trees.
+
+**Teammate sizing:** If a feature has >50 behaviors, consider splitting it across
+multiple teammates — one for plan.md (the main plan) and a sub-team for section
+files (using plan-section-writer). This keeps individual teammate runtime under
+~5 minutes and ensures frequent disk writes.
 
 Use Sonnet for teammates where possible to manage token costs. The lead (Opus)
 handles coordination and the final index generation.
@@ -650,7 +732,8 @@ handles coordination and the final index generation.
 
 While teammates work:
 1. Monitor progress via `TaskList`.
-2. After each batch completes, verify plan files exist:
+2. **Update `.progress.json`** after each batch completes.
+3. After each batch completes, verify plan files exist:
    - `plan.md` exists and is non-empty
    - `plan-tdd.md` exists
    - `sections/index.md` exists
@@ -665,6 +748,19 @@ If a teammate fails:
    complete the sections.
 3. If nothing exists: re-queue with "create" mode.
 4. After all batches, do a cleanup pass for any incomplete features.
+
+### Context Checkpoint: After Plan Generation
+
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
+in `references/context-management.md`.
+
+Step 4 involved monitoring multiple batches of plan-writer teammates, validating outputs,
+and handling failures. This is the heaviest context consumer in the plan workflow.
+**Clear here** before validation.
+
+Preserved files: `interview.md`, `plan-config.json`, `research.md`, `synthesis.md`,
+`planning-strategy.json`, `features/*/plan.md`, `features/*/plan-tdd.md`,
+`features/*/sections/*`
 
 ## Step 5: Validate Plans
 
@@ -694,6 +790,16 @@ Present any inconsistencies to the user for resolution.
 
 Report total sections across all plans. If any feature has 0 sections or seems
 disproportionately small/large relative to its behavior count, flag it.
+
+### Context Checkpoint: After Validation
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+Validation involved scanning plans for coverage, consistency, and section counts.
+If inconsistencies were found and resolved, additional context was consumed. Evaluate
+and clear if needed — Step 6 and beyond can resume from plan files on disk.
+
+Preserved files: All plan files, `planning-strategy.json`, config files
 
 ## Step 6: External Review (Optional)
 
@@ -768,6 +874,16 @@ Improvements noted: {N} (added to Migration Notes)
 Style suggestions: {N} (skipped)
 ```
 
+### Context Checkpoint: After External Review
+
+**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+
+If external review was run, it involved reading plans, making API calls, processing
+responses, and applying fixes. If skipped, this checkpoint is still evaluated (it may
+inherit context load from prior steps). Evaluate and clear if needed.
+
+Preserved files: All plan files, review files (if generated), config files
+
 ## Step 7: Build Plan Index
 
 ### 7a: Write PLAN-INDEX.md
@@ -835,7 +951,11 @@ Next steps:
 
 ## Resume Behavior
 
-On every run, **auto-clear derived artifacts** that are always regenerated:
+On every run, first **check for `.progress.json`**. If it exists, read it to determine
+exactly where the previous run stopped. This is faster and more reliable than scanning
+output files.
+
+Then **auto-clear derived artifacts** that are always regenerated:
 
 ```bash
 rm -f ./docs/plans/planning-strategy.json
@@ -844,6 +964,7 @@ rm -f ./docs/plans/PLAN-INDEX.json
 ```
 
 **Do NOT clear:**
+- `.progress.json` — the orchestrator's resume state (cleared only after Step 8 completes)
 - `interview.md` — user input
 - `plan-config.json` — user decisions
 - `research.md` — expensive research output
@@ -855,9 +976,10 @@ Then apply these resume rules:
 - Step 1: Skip if `interview.md` exists (load it for context).
 - Step 2: Skip if `research.md` exists. Skip synthesis (2e) if `synthesis.md` exists.
 - Step 3: Always re-run (planning-strategy.json was cleared).
-- Context check: Always present (quick).
-- Step 4: Run in **update** mode for features with existing plans, **create** mode
-  for those without. Never skip.
+- Context checkpoint: Always evaluate (quick).
+- Step 4: Use `.progress.json` to determine which features need create vs update mode
+  and which batch to resume from. Fall back to scanning plan files if no progress file
+  exists.
 - Step 5: Always re-run.
 - Step 6: Skip if `reviews/` directories exist for all features. Re-run if new plans
   were generated or updated in Step 4.

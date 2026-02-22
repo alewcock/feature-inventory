@@ -4,7 +4,7 @@
 
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis, then transforms the inventory into fully decomposed, implementation-ready plans for your target architecture.
 
-New in v4.1: **compound engineering compatibility** — plan output now includes YAML frontmatter, `PROJECT_CONFIG` blocks, System-Wide Impact Analysis, and Monitoring & Observability sections. Plans work directly with `/workflows:work` (compound engineering), `/deep-implement`, or any AI agent.
+New in v4.1: **compound engineering compatibility** — plan output now includes YAML frontmatter, `PROJECT_CONFIG` blocks, System-Wide Impact Analysis, and Monitoring & Observability sections. Plans work directly with `/workflows:work` (compound engineering), `/deep-implement`, or any AI agent. Also adds spec synthesis (interview + research + inventory merged into a unified brief), adaptive analysis with uncertainty mapping, gap-analysis skill integration for existing code detection, and foreign planning doc detection with automatic archiving.
 
 New in v4: **plan generation command** that interviews you about rebuild strategy (motivation, tech stack, architecture, scope), researches the target stack, and produces per-feature implementation plans with TDD stubs and self-contained section files that AI/agent teams can implement directly. All output now organized under `docs/` (`docs/features/`, `docs/gap-analysis/`, `docs/plans/`).
 
@@ -204,6 +204,7 @@ docs/plans/
 ├── interview.md                # Strategic rebuild interview
 ├── plan-config.json            # Tech stack, architecture, scope decisions
 ├── research.md                 # Target stack research + existing code analysis
+├── synthesis.md                # Unified brief: interview + research + inventory
 ├── planning-strategy.json      # Feature scope, phases, cross-cutting concerns
 └── features/                   # One plan directory per major feature
     ├── F-001/
@@ -264,7 +265,7 @@ This eliminates the "shallow feature" problem where downstream agents encounter 
 
 Plan generation uses Agent Teams at three levels:
 
-1. **Research Team**: Parallel teammates for web research, codebase analysis, and inventory characterization (up to 3 concurrent)
+1. **Research Team**: Parallel teammates for web research, gap analysis (via `/feature-inventory:gap-analysis`), and inventory characterization (up to 3 concurrent)
 2. **Plan Writers**: Parallel teammates producing feature plans (batches of 5). Each plan-writer maps inventory behaviors to the target architecture, decomposes into implementation sections, and writes TDD test stubs.
 3. **Section Writers**: Within each plan-writer, parallel teammates writing individual section files (batches of 5). Each section is self-contained — an implementer reads only that file and can start building.
 

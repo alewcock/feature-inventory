@@ -361,9 +361,63 @@ rm -f ./docs/plans/research-inventory.md
 
 These were merged into `research.md` and are no longer needed.
 
+### 2e: Synthesize Planning Brief
+
+Before planning individual features, synthesize the three input sources into a single
+unified brief that plan-writers will use as their primary reference. This avoids each
+plan-writer independently re-reading and reconciling the same three documents.
+
+If `./docs/plans/synthesis.md` already exists, skip this step.
+
+Combine:
+1. **Interview decisions** (`interview.md`): Why rebuilding, tech stack, scope, architecture,
+   priorities, constraints, `[UNCERTAIN]` areas
+2. **Research findings** (`research.md`): Stack best practices, existing code status,
+   inventory characterization, cross-cutting concerns
+3. **Inventory overview** (`FEATURE-INDEX.json`): Feature hierarchy, dependency graph,
+   build order, behavior counts
+
+Into `./docs/plans/synthesis.md`:
+
+```markdown
+# Planning Brief
+
+## Product Summary
+{What this product does, from inventory interview}
+
+## Rebuild Strategy
+{Synthesized from interview: motivation, scope, architecture changes}
+
+## Target Architecture
+{Synthesized from interview + research: stack choices, patterns, project structure}
+
+## Inventory Overview
+{Feature count, behavior count, dependency clusters, complexity distribution}
+
+## Cross-Cutting Concerns
+{Merged from research + inventory: shared patterns that span features}
+
+## Uncertain Areas
+{Aggregated [UNCERTAIN] flags from interview + ambiguities from inventory.
+Each area gets a note on how research addressed it, or "still uncertain —
+plan-writer should flag for implementer."}
+
+## Existing Code Status
+{From research/gap analysis: what's built, what's partial, what's missing}
+
+## Constraints & Priorities
+{From interview: launch-critical features, hard deadlines, compliance,
+performance targets}
+```
+
+This is the single document that captures ALL strategic context. Plan-writers
+read `synthesis.md` + `plan-config.json` instead of separately reading interview,
+research, and inventory overview files. This reduces context usage per teammate
+and ensures consistent interpretation across all feature plans.
+
 ## Step 3: Create Planning Strategy
 
-Based on the interview, research, and inventory, create the planning approach.
+Based on the synthesis, research, and inventory, create the planning approach.
 
 ### 3a: Determine Feature Scope
 
@@ -499,18 +553,22 @@ For each feature in scope:
    - The inventory path
    - The output path (`./docs/plans/features/{feature_id}/`)
    - The plan-config.json path
-   - The interview.md path
+   - The synthesis.md path (unified planning brief — primary context)
+   - The interview.md path (for feature-specific grep if needed)
    - The research.md path (if it exists)
    - The gap analysis path (if it exists)
    - The product context (brief summary)
    - A pointer to read `references/context-management.md` before starting
    - A pointer to read `references/plan-output-format.md` for output structure
-   - This instruction verbatim: **"Write a self-contained implementation plan
-     that an engineer or AI agent with NO prior context can pick up and start
-     building from. Map every inventory behavior to a plan section. Include
-     architecture mapping, data model translation, API design, and TDD test
-     stubs. Plans are prose — no full code implementations. Write files to disk
-     immediately as you complete each one."**
+   - This instruction verbatim: **"Read synthesis.md first for strategic context,
+     then read the inventory detail files for this feature. Write a self-contained
+     implementation plan that an engineer or AI agent with NO prior context can
+     pick up and start building from. Map every inventory behavior to a plan
+     section. Include architecture mapping, data model translation, API design,
+     TDD test stubs, system-wide impact analysis, and monitoring guidance. Plans
+     are prose — no full code implementations. Flag any [UNCERTAIN] areas from
+     synthesis.md that affect this feature. Write files to disk immediately as
+     you complete each one."**
 5. **Wait for each batch to finish** before spawning the next.
 
 Use Sonnet for teammates where possible to manage token costs. The lead (Opus)
@@ -717,12 +775,13 @@ rm -f ./docs/plans/PLAN-INDEX.json
 - `interview.md` — user input
 - `plan-config.json` — user decisions
 - `research.md` — expensive research output
+- `synthesis.md` — expensive synthesis output
 - `features/` — plans are updated incrementally, not rebuilt
 
 Then apply these resume rules:
 - Step 0: Always validate inventory (quick).
 - Step 1: Skip if `interview.md` exists (load it for context).
-- Step 2: Skip if `research.md` exists.
+- Step 2: Skip if `research.md` exists. Skip synthesis (2e) if `synthesis.md` exists.
 - Step 3: Always re-run (planning-strategy.json was cleared).
 - Context check: Always present (quick).
 - Step 4: Run in **update** mode for features with existing plans, **create** mode

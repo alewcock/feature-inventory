@@ -30,6 +30,7 @@ You will receive:
 - `inventory_path`: Path to `docs/features/` containing the feature inventory
 - `output_path`: Path to write plan files (e.g., `docs/plans/features/F-001/`)
 - `plan_config_path`: Path to `docs/plans/plan-config.json`
+- `synthesis_path`: Path to `docs/plans/synthesis.md` (unified planning brief)
 - `interview_path`: Path to `docs/plans/interview.md`
 - `research_path`: Path to `docs/plans/research.md` (may not exist)
 - `gap_analysis_path`: Path to gap analysis output (may not exist)
@@ -45,6 +46,42 @@ This is critical. You are reading inventory detail files AND producing plan outp
 4. **Use Grep to find relevant sections**, not full file reads.
 5. **Never hold more than ~200 lines of source content in context at once.**
 
+## Adaptive Analysis Protocol
+
+Apply these principles throughout ALL phases of plan writing — not just when
+reading inputs, but when designing architecture, decomposing sections, and
+writing the plan itself.
+
+### Think Adaptively, Not Mechanically
+
+- **Follow the feature's natural structure.** Don't force a fixed template onto
+  every feature. A data-heavy feature needs deep schema coverage. An integration-heavy
+  feature needs detailed API contracts. Adapt your depth to what matters.
+- **Stop when you have enough.** Don't read every behavior file if the sub-feature
+  file gives you sufficient detail. Don't add sections for aspects that don't apply.
+- **Dig deeper when something is surprising.** If an inventory spec reveals unexpected
+  complexity (circular dependencies, unusual state machines, complex validation rules),
+  spend more time on that area.
+
+### Map Uncertainty
+
+- **Flag `[UNCERTAIN]` areas** inherited from `synthesis.md` that affect this feature.
+  Don't resolve uncertainty by guessing — propagate it to the implementer.
+- **Flag `[THIN_SPEC]`** when inventory detail files lack sufficient specification
+  for a behavior. Note what's missing so the implementer can investigate.
+- **Flag `[NEEDS_CLARIFICATION]`** when architectural decisions could go multiple ways
+  and the plan-config doesn't resolve the ambiguity. Present the options and recommend
+  one, but note the alternative.
+- **Include all flags in the plan's Migration Notes section** so they're easy to find.
+
+### Reconcile Sources
+
+When inventory specs, synthesis context, and gap analysis disagree:
+- Inventory specs are the source of truth for WHAT the feature does
+- Synthesis / plan-config is the source of truth for HOW to build it
+- Gap analysis is the source of truth for what ALREADY EXISTS
+- Document any conflicts you notice in Migration Notes
+
 ## Mode Selection
 
 Check your `mode` input and follow the appropriate workflow:
@@ -58,27 +95,32 @@ Check your `mode` input and follow the appropriate workflow:
 
 ### Phase 1: Gather Strategic Context
 
-Before writing anything, understand the rebuild strategy:
+Before writing anything, understand the rebuild strategy. The orchestrator has
+already synthesized interview + research + inventory into a unified brief.
 
-1. **Read `plan-config.json`** to get:
+1. **Read `synthesis.md`** (primary context document):
+   - Product summary and rebuild strategy
+   - Target architecture and stack choices
+   - Cross-cutting concerns
+   - `[UNCERTAIN]` areas (give these extra attention in your plan)
+   - Existing code status
+   - Constraints and priorities
+
+2. **Read `plan-config.json`** for machine-readable decisions:
    - Target tech stack (languages, frameworks, databases)
+   - Project tooling (runtime, test_command, build_command, lint_command)
    - Architecture decisions
    - Rebuild scope (1:1, minimum+additions, selective)
-   - Any feature-specific overrides
 
-2. **Read `interview.md`** (skim — first 50 lines + grep for your feature name):
-   - Why is this feature being rebuilt?
-   - Any user-stated priorities or concerns for this feature?
-   - Architecture changes affecting this feature?
-
-3. **Read `research.md`** if it exists (grep for relevant tech/patterns):
-   - Target stack patterns relevant to this feature
-   - Best practices for the type of functionality this feature provides
-
-4. **Check gap analysis** if it exists:
+3. **Check gap analysis** if it exists:
    - Read `gap-analysis/raw/{feature_id}.md` for existing code status
    - Identify what's DONE, PARTIAL, and NOT STARTED
    - This shapes the plan — no need to re-plan what's already built
+
+4. **Grep `interview.md` for your feature name** (only if synthesis.md doesn't
+   have enough feature-specific context):
+   - Any user-stated priorities or concerns for this feature?
+   - Architecture changes affecting this feature?
 
 ### Phase 2: Read the Inventory Specification
 

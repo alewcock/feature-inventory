@@ -147,6 +147,23 @@ edge cases, field types), refer to the inventory detail files:
 
 ## Writing Guidelines
 
+### Adaptive Analysis
+
+Apply these principles when reading inventory behaviors and writing the section:
+
+- **Adapt depth to complexity.** Simple CRUD behaviors get concise descriptions.
+  Complex state machines, validation chains, or integration flows get thorough
+  coverage. Don't apply uniform detail to everything.
+- **Flag uncertainty.** If an inventory behavior spec is thin or ambiguous, mark it
+  `[THIN_SPEC]` in the Acceptance Criteria and note what's missing. If architectural
+  decisions in the plan content could go multiple ways, mark `[NEEDS_CLARIFICATION]`
+  and recommend one approach while noting the alternative.
+- **Propagate `[UNCERTAIN]` flags** from the parent plan.md that affect behaviors in
+  this section. Don't resolve uncertainty by guessing — make it visible.
+- **Stop reading when sufficient.** If the inventory behavior file gives you enough
+  detail from the first few sections, don't read the entire file. Extract what you
+  need and move on.
+
 ### Self-Containment
 
 The implementer should NEVER need to read another section file, the parent plan.md,

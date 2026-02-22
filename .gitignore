@@ -1,0 +1,13 @@
+# Output directories (generated at runtime, not part of the plugin)
+feature-inventory-output/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

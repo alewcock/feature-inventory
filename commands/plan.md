@@ -67,7 +67,9 @@ The command accepts one optional argument:
    Defaults to `./docs/features/`. If it doesn't exist, tell the user to
    run `/feature-inventory:create` first.
 
-## Step 0: Validate Inventory
+## Step 0: Validate Inventory & Detect Existing Plans
+
+### 0a: Validate Inventory
 
 1. Verify `{inventory-path}/FEATURE-INDEX.json` exists. If not, stop and tell the
    user they need a completed feature inventory first:
@@ -82,7 +84,59 @@ The command accepts one optional argument:
 4. Verify detail files exist for the features listed. Warn if any are missing.
 5. Count total features, sub-features, and behaviors.
 
-Present a brief summary:
+### 0b: Detect Existing Plan Docs
+
+Check if `./docs/plans/` already exists. If it does, determine provenance —
+were these docs produced by this plugin, or by something else?
+
+**Check for our fingerprint:** Look for `plan-config.json` with our schema
+(has `rebuild_scope`, `target_stack`, `project_tooling` keys). Also check
+for `synthesis.md` or `planning-strategy.json`.
+
+- **Our docs found** (at least `plan-config.json` with our schema):
+  This is a resume. Report what exists and proceed with incremental updates:
+
+  ```
+  Existing plan docs found (from previous run)
+  =============================================
+  Interview: {exists / missing}
+  Config: {exists / missing}
+  Research: {exists / missing}
+  Synthesis: {exists / missing}
+  Feature plans: {N} found
+
+  Resuming from where we left off...
+  ```
+
+- **Foreign docs found** (`docs/plans/` exists but no `plan-config.json` with
+  our schema, or the schema doesn't match):
+  These were created by another tool, manually, or by an older version. Ask:
+
+  ```
+  question: "Found existing planning docs in docs/plans/ that weren't created by this plugin. How should we handle them?"
+  header: "Existing Plans"
+  options:
+    - label: "Use as reference"
+      description: "Read existing plans as context for our planning — useful if they contain good architectural decisions"
+    - label: "Start fresh"
+      description: "Move existing docs to docs/plans-backup/ and generate new plans from the inventory"
+    - label: "Abort"
+      description: "Stop and let me review what's in docs/plans/ first"
+  ```
+
+  If **use as reference**: Read any `.md` files in `docs/plans/` and include
+  relevant context in `synthesis.md` under an "External Planning Context" section.
+  Then create our own plan docs alongside (our files have distinct names).
+
+  If **start fresh**:
+  ```bash
+  mv ./docs/plans ./docs/plans-backup-$(date +%Y%m%d-%H%M%S)
+  mkdir -p ./docs/plans
+  ```
+
+  If **abort**: Stop immediately.
+
+### 0c: Present Summary
 
 ```
 Feature Inventory Found
@@ -311,17 +365,32 @@ Spawn research teammates in a single batch. These run in parallel:
     inventory's characteristics (API-heavy? UI-heavy? real-time? batch?)
 - Output: Write findings to `./docs/plans/research-web.md`
 
-**Teammate 2 — Existing Code Analysis** (only if user has a new codebase):
-- Agent: use a codebase analysis task
-- Task: Analyze the existing new project
-- Scope:
-  - Check if gap analysis exists at `./docs/gap-analysis/GAP-ANALYSIS.json`
-    and read it if so
-  - If no gap analysis: scan the new project structure, tech stack, which
-    features appear to have implementation started, testing setup, architecture
-    patterns in use
-  - Determine per-feature implementation status (DONE, PARTIAL, NOT STARTED)
-- Output: Write findings to `./docs/plans/research-codebase.md`
+**Teammate 2 — Gap Analysis** (only if user has a new codebase):
+
+First check if gap analysis already exists at `./docs/gap-analysis/GAP-ANALYSIS.json`.
+
+- **If gap analysis exists:** Skip this teammate. The structured per-feature reports
+  in `docs/gap-analysis/raw/` will be used directly by plan-writers.
+- **If no gap analysis exists:** Run the gap analysis skill before proceeding.
+  Tell the user:
+
+  > **Existing code detected but no gap analysis found.**
+  >
+  > Running `/feature-inventory:gap-analysis {existing_code_path} {inventory_path}`
+  > to determine per-feature implementation status before generating plans.
+  > This ensures plans account for what's already built.
+
+  Wait for gap analysis to complete. It produces structured output that plan-writers
+  consume: `GAP-ANALYSIS.json` with per-feature DONE/PARTIAL/NOT_STARTED status,
+  and `raw/{feature_id}.md` with detailed per-behavior analysis.
+
+  Do NOT spawn an ad-hoc codebase analysis teammate — the gap-analysis skill
+  is specifically designed for this comparison and produces better structured output.
+
+After gap analysis completes (or was already present), spawn a teammate to summarize:
+- Agent: use an analysis task
+- Task: Read `GAP-ANALYSIS.json` and summarize implementation status
+- Output: Write summary to `./docs/plans/research-codebase.md`
 
 **Teammate 3 — Inventory Analysis** (always):
 - Agent: use an analysis task

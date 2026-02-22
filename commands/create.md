@@ -78,18 +78,31 @@ manage its context to prevent this.
    that agent. This means the user can `/clear` and re-run `/feature-inventory` and it
    picks up where it left off.
 
-### Mandatory Context Checkpoints
+### Batch-Level Hard Stops (Primary Protection)
 
-**This workflow has mandatory context checkpoints at every step boundary.** At each
-checkpoint, the orchestrator MUST evaluate its context health and clear if needed.
-See `references/context-management.md` § "Context Checkpoint Protocol" for the full
+**During any step that dispatches agent batches (Steps 3, 3.5, 4b), the orchestrator
+MUST perform a hard stop after every 2 completed batches.** This means: save all state
+to `.progress.json`, print a checkpoint message with resume instructions, and **STOP.**
+Do not continue. The user will `/compact` or `/clear` and re-run the command.
+
+This is the most important context management mechanism. See
+`references/context-management.md` § "Batch-Level Hard Stop Protocol" for the full
+procedure. The VS Code context percentage UI does **not** update during a long-running
+turn — the user has zero visibility into context health while the orchestrator is
+running. Hard stops give the user regular opportunities to check and manage context.
+
+### Step-Boundary Checkpoints
+
+**This workflow also has checkpoints at every step boundary.** At each checkpoint, the
+orchestrator MUST evaluate its context health and clear if needed. See
+`references/context-management.md` § "Context Checkpoint Protocol" for the full
 protocol.
 
 Checkpoints are marked with `### Context Checkpoint` headers throughout this document.
 **Do not skip them.** Each checkpoint is a safe resume point — all prior state is on
 disk and the next step can start from those files.
 
-**The orchestrator should expect to `/clear` at least 2-3 times during a full
+**The orchestrator should expect to `/compact` or `/clear` many times during a full
 inventory run.** This is normal and by design. The alternative — hitting "prompt is
 too long" — is catastrophic and unrecoverable.
 
@@ -394,6 +407,20 @@ For each repo and each dimension in the plan:
 5. **Wait for the batch to finish** before spawning the next batch.
 6. **Update `.progress.json`** after each batch completes with the list of completed
    and pending dimensions.
+7. **Batch-level hard stop (every 2 batches).** After completing every 2nd batch,
+   the orchestrator MUST perform a hard stop. See `references/context-management.md`
+   § "Batch-Level Hard Stop Protocol" for the full procedure. In brief:
+   - Update `.progress.json` with all completed/pending/failed dimensions
+   - Verify all output files from completed batches exist and are non-empty
+   - Print the batch checkpoint message (completed count, remaining count,
+     resume instructions)
+   - **STOP.** Do not start the next batch. Do not continue any other work.
+   - The user will `/compact` or `/clear` and re-run. The command resumes from
+     `.progress.json` at the next batch.
+
+   **This is not optional.** A codebase with 100+ agent tasks across 20 batches will
+   exhaust context long before all batches complete if the orchestrator runs
+   continuously. The 2-batch cadence ensures the user can manage context health.
 
 Use Sonnet for teammates where possible to manage token costs. The lead (Opus) handles
 coordination and the final merge/index generation.
@@ -521,7 +548,11 @@ Filling {N} gaps in {ceil(N/5)} batches...
    output_path: "raw/{repo-name}/ui-screens--ControlCenter.md"
    ```
 4. Spawn gap-filling teammates in batches of up to 5.
-5. After gap-fill agents complete, **re-run the coverage audit script** (go back to 3.5a).
+5. **Batch-level hard stop applies here too.** Gap-fill batches count toward the
+   2-batch cadence. If this is the 2nd batch since the last hard stop (including
+   batches from Step 3), perform the hard stop procedure. See
+   `references/context-management.md` § "Batch-Level Hard Stop Protocol."
+6. After gap-fill agents complete, **re-run the coverage audit script** (go back to 3.5a).
 
 ### 3.5d: Cap Gap-Fill Cycles
 
@@ -693,7 +724,13 @@ Each teammate runs in one of two modes depending on whether prior output exists.
 
 5. **Wait for each batch to finish** before spawning the next.
 
-6. **After each batch:** Verify detail files exist for the completed feature areas.
+6. **Batch-level hard stop (every 2 batches).** After completing every 2nd batch
+   of synthesis work, perform the hard stop procedure. See
+   `references/context-management.md` § "Batch-Level Hard Stop Protocol."
+   Update `.progress.json` with completed/pending features and the current batch
+   number so the command resumes at the right point.
+
+7. **After each batch:** Verify detail files exist for the completed feature areas.
    If a teammate failed or produced partial output, re-queue.
 
 ### Context Checkpoint: After Synthesis

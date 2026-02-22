@@ -63,18 +63,31 @@ manage its context to prevent this.
 4. **Resume capability:** Check for existing plan output files before spawning
    agents. Skip completed areas.
 
-### Mandatory Context Checkpoints
+### Batch-Level Hard Stops (Primary Protection)
 
-**This workflow has mandatory context checkpoints at every step boundary.** At each
-checkpoint, the orchestrator MUST evaluate its context health and clear if needed.
-See `references/context-management.md` § "Context Checkpoint Protocol" for the full
+**During Step 4 (plan generation), the orchestrator MUST perform a hard stop after
+every 2 completed batches of plan-writer teammates.** This means: save all state to
+`.progress.json`, print a checkpoint message with resume instructions, and **STOP.**
+Do not continue. The user will `/compact` or `/clear` and re-run the command.
+
+This is the most important context management mechanism. See
+`references/context-management.md` § "Batch-Level Hard Stop Protocol" for the full
+procedure. The VS Code context percentage UI does **not** update during a long-running
+turn — the user has zero visibility into context health while the orchestrator is
+running. Hard stops give the user regular opportunities to check and manage context.
+
+### Step-Boundary Checkpoints
+
+**This workflow also has checkpoints at every step boundary.** At each checkpoint, the
+orchestrator MUST evaluate its context health and clear if needed. See
+`references/context-management.md` § "Context Checkpoint Protocol" for the full
 protocol.
 
 Checkpoints are marked with `### Context Checkpoint` headers throughout this document.
 **Do not skip them.** Each checkpoint is a safe resume point — all prior state is on
 disk and the next step can start from those files.
 
-**The orchestrator should expect to `/clear` at least 1-2 times during a full
+**The orchestrator should expect to `/compact` or `/clear` multiple times during a full
 plan generation run.** This is normal and by design.
 
 ### Automated Context Watchdog
@@ -693,6 +706,19 @@ For each feature in scope:
      writing it to disk."**
 5. **Wait for each batch to finish** before spawning the next.
 6. **Update `.progress.json`** after each batch with completed/pending/failed features.
+7. **Batch-level hard stop (every 2 batches).** After completing every 2nd batch,
+   the orchestrator MUST perform a hard stop. See `references/context-management.md`
+   § "Batch-Level Hard Stop Protocol" for the full procedure. In brief:
+   - Update `.progress.json` with all completed/pending/failed features and the
+     current batch number
+   - Verify plan files from completed batches exist (plan.md, plan-tdd.md, sections/)
+   - Print the batch checkpoint message with resume instructions
+   - **STOP.** Do not start the next batch. The user will `/compact` or `/clear`
+     and re-run. The command resumes from `.progress.json`.
+
+   **This is critical for large inventories.** A product with 15+ major features
+   means 3+ batches of plan-writers, each with nested section-writer sub-teams.
+   Context accumulates fast from monitoring these multi-level agent trees.
 
 **Teammate sizing:** If a feature has >50 behaviors, consider splitting it across
 multiple teammates — one for plan.md (the main plan) and a sub-team for section

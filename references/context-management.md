@@ -141,6 +141,122 @@ Tag it inline: `[AMBIGUOUS] {description of what's unclear}`
 
 The orchestrator will collect these and ask the user.
 
+## Batch-Level Hard Stop Protocol (Orchestrators Only)
+
+**This is the single most important context management mechanism.** All other
+protections (step-boundary checkpoints, watchdog warnings) are secondary to this.
+
+### The Problem
+
+When the orchestrator dispatches agents in batches (e.g., 20 batches of 5 agents for
+a large codebase = 100 agents), it runs in a continuous loop: spawn batch → monitor →
+spawn next batch → monitor → ... This loop can run for **hours** without the
+orchestrator ever yielding control back to the user. During this time:
+
+- Context grows with every TaskCreate, TaskList, SendMessage, and output verification
+- The step-boundary checkpoint is hours away (at the END of all batches)
+- The user cannot intervene to `/compact` or `/clear` because the orchestrator is busy
+- Auto-compaction may not trigger, or may not free enough space
+- **The VS Code context percentage UI does not update during a long-running turn.** The
+  user sees stale/low context usage because the UI only refreshes between turns. The
+  orchestrator's continuous loop is one giant turn — the user has zero visibility into
+  context health until the crash happens.
+- Eventually: "prompt is too long" → crash → all running agents orphaned
+
+### The Rule
+
+**After completing every 2nd batch of agent work, the orchestrator MUST perform a
+hard stop.** This is not a suggestion. This is not "evaluate and maybe continue."
+This is: **save state, print checkpoint message, STOP.**
+
+The user then:
+1. Checks context health (visible in VS Code status bar)
+2. Runs `/compact` to continue in the same session, OR `/clear` for a full reset
+3. Re-runs the command — it resumes from `.progress.json`
+
+### Hard Stop Procedure
+
+After the 2nd, 4th, 6th, ... batch completes:
+
+1. **Update `.progress.json`** with all completed work (batch number, completed items,
+   pending items, failed items).
+
+2. **Verify all batch outputs are on disk** — check that every teammate from the
+   completed batches produced a non-empty output file.
+
+3. **Present this message:**
+
+   ```
+   ⚠ BATCH CHECKPOINT — HARD STOP
+
+   Completed: {N}/{total} batches ({completed_items} items done)
+   Remaining: {remaining_items} items in {remaining_batches} batches
+
+   The orchestrator has been monitoring agent work and context has grown.
+   Continuing without compaction risks a session crash.
+
+   To continue:
+     1. Check your context usage (visible in VS Code status bar)
+     2. Run /compact to free space, then re-run this command
+        OR run /clear then re-run this command for a full reset
+     3. The command will resume from batch {next_batch}
+
+   All progress is saved:
+     {progress_file_path}
+     {list of completed output files}
+   ```
+
+4. **STOP.** Do not continue. Do not start the next batch. Do not do any more work.
+   The orchestrator's turn ends here.
+
+### Why Every 2 Batches?
+
+Each batch of 5 agents requires approximately:
+- 5 TaskCreate calls
+- 5-15 TaskList polling calls
+- 5-10 output verification reads
+- 1 progress file write
+
+That's ~15-30 tool calls per batch. Two batches = ~30-60 tool calls, which aligns
+with the WARN→CRITICAL threshold in the watchdog. Stopping here prevents the
+orchestrator from ever reaching the BLOCK threshold under normal operation.
+
+For very small batches (1-2 agents), the orchestrator MAY continue through 3 batches
+before stopping, but MUST stop after 3 regardless.
+
+### Interaction with Step-Boundary Checkpoints
+
+Step-boundary checkpoints still apply. The batch-level hard stop is **additional** —
+it fires WITHIN long-running steps (Steps 3, 3.5, 4 of create.md; Step 4 of plan.md).
+The two mechanisms complement each other:
+
+| Mechanism | When | Enforcement |
+|-----------|------|-------------|
+| Step-boundary checkpoint | Between major steps | LLM compliance (soft) |
+| Batch-level hard stop | Every 2 batches within a step | LLM compliance (hard instruction) |
+| Context watchdog BLOCK | 75+ tool calls / 800KB | Deterministic code (hard block) |
+
+The batch-level hard stop should prevent the watchdog from ever triggering under normal
+operation. The watchdog is the safety net for when the orchestrator ignores the hard stop.
+
+### Interaction with Progress File
+
+The progress file schema already supports batch-level resume:
+
+```json
+{
+  "batch_number": 4,        // ← resume from batch 5
+  "batches_total": 10,
+  "completed_dimensions": [...],  // ← skip these
+  "pending_dimensions": [...],    // ← do these next
+}
+```
+
+This is why the progress file update rules require updating **after every batch**, not
+just at step boundaries. The batch-level hard stop depends on this.
+
+---
+
 ## Context Checkpoint Protocol (Orchestrators Only)
 
 **This section applies to the lead orchestrator, not to teammates.** Teammates have fresh

@@ -29,20 +29,20 @@ Or export in your shell: `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
 Create your own marketplace or add this repo directly:
 
 ```bash
-/plugin marketplace add controlplay/feature-inventory
-/plugin install feature-inventory@controlplay
+/plugin marketplace add alewcock/feature-inventory
+/plugin install feature-inventory@alewcock
 ```
 
 ### From GitHub directly
 
 ```bash
-claude plugin add github:controlplay/feature-inventory
+claude plugin add github:alewcock/feature-inventory
 ```
 
 ### Local development
 
 ```bash
-git clone https://github.com/controlplay/feature-inventory.git
+git clone https://github.com/alewcock/feature-inventory.git
 claude --plugin-dir ./feature-inventory
 ```
 

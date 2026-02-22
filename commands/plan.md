@@ -112,7 +112,7 @@ for `synthesis.md` or `planning-strategy.json`.
   our schema, or the schema doesn't match):
   These were created by another tool, manually, or by an older version.
 
-  **Review then archive:** Read any `.md` files in `docs/plans/` for context on
+  **Review then archive:** Read any `.md` and `.json` files in `docs/plans/` for context on
   the existing codebase — architectural decisions, tech stack choices, domain
   knowledge, and prior planning work are all valuable input. Then move the
   foreign docs to an archive folder so our plan output has a clean directory:
@@ -127,7 +127,7 @@ for `synthesis.md` or `planning-strategy.json`.
   ```
   Foreign planning docs found in docs/plans/
   ===========================================
-  Files: {list of .md files found}
+  Files: {list of .md and .json files found}
   Archived to: docs/plans-archive-{timestamp}/
 
   These docs will be reviewed for context on existing code and

@@ -1,8 +1,10 @@
 # feature-inventory
 
-**v4.1.0**
+**v4.2.0**
 
-A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis, then transforms the inventory into fully decomposed, implementation-ready plans for your target architecture.
+A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis, then transforms the inventory into fully decomposed, implementation-ready plans for your target architecture and marketing-ready product catalogs for go-to-market teams.
+
+New in v4.2: **marketing catalog generation** — transforms the feature inventory into a go-to-market product catalog with marketing names, user-value descriptions, and cross-feature value propositions. Interviews users to capture positioning context, audience insights, and competitive landscape. Supports incremental updates — dates new entries and tracks changes to existing ones. Output stored in `docs/marketing/`.
 
 New in v4.1: **compound engineering compatibility** — plan output now includes YAML frontmatter, `PROJECT_CONFIG` blocks, System-Wide Impact Analysis, and Monitoring & Observability sections. Plans work directly with `/workflows:work` (compound engineering), `/deep-implement`, or any AI agent. Also adds spec synthesis (interview + research + inventory merged into a unified brief), adaptive analysis with uncertainty mapping, gap-analysis skill integration for existing code detection, and foreign planning doc detection with automatic archiving.
 
@@ -81,7 +83,8 @@ It interviews the user to capture tribal knowledge, then systematically analyzes
 | `/feature-inventory:create [path]` | Run the full inventory analysis |
 | `/feature-inventory:gap-analysis [new-project] [inventory-path]` | Compare a new project against the inventory |
 | `/feature-inventory:plan [inventory-path]` | Generate implementation plans from a completed inventory |
-| `/feature-inventory:status` | Check progress of inventory, gap analysis, or plan generation |
+| `/feature-inventory:marketing-catalog [inventory-path]` | Generate a marketing-ready product catalog for go-to-market teams |
+| `/feature-inventory:status` | Check progress of inventory, gap analysis, plan generation, or marketing catalog |
 
 ## What It Analyzes (9 Dimensions)
 
@@ -142,13 +145,32 @@ The plan generation uses Agent Teams at every stage:
 - **Plan generation**: Parallel teammates writing feature plans (batches of 5)
 - **Section writing**: Parallel teammates writing implementation sections within each feature
 
+### Generate a marketing catalog
+
+```
+/feature-inventory:marketing-catalog [inventory-path]
+```
+
+Transforms a completed feature inventory into a marketing-ready product capabilities catalog designed for go-to-market teams. Interviews you about target audience, competitive positioning, messaging tone, and value themes, then produces catalog entries with marketing names, user-value descriptions, and cross-feature value propositions.
+
+Requires a completed feature inventory (`FEATURE-INDEX.json` must exist).
+
+The marketing catalog:
+- **Interviews you** about positioning, audience, and competitive context
+- **Scans for existing marketing materials** in `docs/marketing/` to maintain consistency
+- **Translates technical features** into plain-language, value-focused descriptions
+- **Identifies cross-feature value propositions** — combinations of features that create compelling product stories
+- **Interviews you per feature** to capture persona, differentiator, and sales context
+- **Tracks changes over time** — dates new entries, dates updates, maintains a changelog
+- **Supports incremental updates** — on re-run, detects inventory changes and updates only affected entries
+
 ### Check progress
 
 ```
 /feature-inventory:status
 ```
 
-Shows plugin version, interview status, which dimensions are complete, coverage audit results, synthesis progress, gap analysis status, and plan generation status. Useful after a `/clear` or interruption to see where things stand before resuming.
+Shows plugin version, interview status, which dimensions are complete, coverage audit results, synthesis progress, gap analysis status, plan generation status, and marketing catalog status. Useful after a `/clear` or interruption to see where things stand before resuming.
 
 ### Resume after interruption
 
@@ -217,6 +239,22 @@ docs/plans/
     ├── cross-cutting/          # Shared infrastructure plan
     │   └── ...
     └── ...
+```
+
+### Marketing Catalog
+
+```
+docs/marketing/
+├── MARKETING-CATALOG.md            # Master catalog for go-to-market teams
+├── MARKETING-CATALOG.json          # Machine-readable for CMS/API/tooling
+├── interview.md                    # Marketing context interview answers
+├── catalog-config.json             # Audience, tone, positioning decisions
+├── catalog-state.json              # Change tracking for incremental updates
+└── entries/                        # One file per marketing entry
+    ├── F-001.md                    # Feature area entry (marketing name + description)
+    ├── F-001-composite.md          # Within-area composite value proposition
+    ├── COMPOSITE-001.md            # Cross-product value proposition
+    └── archived/                   # Entries for deprecated features
 ```
 
 ### The Index
@@ -293,6 +331,7 @@ Plan output is designed to work with multiple implementation tools:
 | `gap-analyzer` | Compares new project against inventory for one feature area |
 | `plan-writer` | Produces implementation plans for one feature area (create/update modes) |
 | `plan-section-writer` | Writes self-contained implementation section files in parallel |
+| `marketing-catalog-writer` | Translates feature areas into marketing-ready catalog entries with user interviews |
 
 ## Customization
 
@@ -334,4 +373,16 @@ For a medium-sized inventory (15 major features, ~400 behaviors):
 
 Subtotal: ~1.6M-1.8M tokens.
 
-**Claude Max subscription strongly recommended.** The combined workflow (create + gap-analysis + plan) can exceed 2.5M tokens for medium products.
+### Marketing Catalog (marketing-catalog)
+
+For a medium-sized inventory (15 major features):
+- Marketing interview: ~15k tokens
+- Existing materials scan: ~10k tokens
+- Catalog generation (15 features x ~40k each): ~600k tokens across teammates
+- Cross-product value proposition analysis: ~30k tokens
+- User interviews per feature: ~50k tokens (depends on depth)
+- Index + assembly: ~30k tokens
+
+Subtotal: ~700k-800k tokens.
+
+**Claude Max subscription strongly recommended.** The combined workflow (create + gap-analysis + plan + marketing-catalog) can exceed 3M tokens for medium products.

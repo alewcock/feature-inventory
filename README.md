@@ -1,8 +1,10 @@
 # feature-inventory
 
-**v2.0.0**
+**v3.0.0**
 
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Produces a deeply decomposed, hierarchically structured specification designed for AI/agent teams to rebuild the entire product from scratch.
+
+New in v3: user resolution interview phase that eliminates ambiguous, thin, and overlapping features from the inventory through targeted user questions — ensuring every feature is either fully specified, explicitly related, or honestly marked as unresolved.
 
 New in v2: gap analysis command, improved synthesis with verify-and-improve mode, parallelized feature synthesis via Agent Teams, source coverage auditing, and automatic clearing of derived artifacts on re-run.
 
@@ -107,7 +109,8 @@ The plugin will:
 6. **Audit source coverage** to catch analysis gaps before synthesis
 7. **Build the feature hierarchy** with parallel synthesis via Agent Teams
 8. **Generate detail files** for every feature and behavior
-9. **Validate** against your original feature map
+9. **Interview you again** to resolve thin, ambiguous, or overlapping features
+10. **Validate** against your original feature map
 
 ### Run a gap analysis
 
@@ -146,7 +149,8 @@ feature-inventory-output/
 │   └── ...
 ├── interview.md               # User interview answers
 ├── user-feature-map.md        # User's mental model of features
-├── clarifications.md          # Resolved ambiguities
+├── clarifications.md          # Resolved ambiguities (code analysis)
+├── clarifications-features.md # Resolved ambiguities (feature specs)
 ├── coverage-audit.json        # Source file coverage report
 ├── synthesis-plan.json        # Feature-to-dimension mapping
 ├── raw/                       # Per-dimension analysis (intermediate)
@@ -202,6 +206,17 @@ This means:
 
 Feature synthesis is also parallelized via Agent Teams. Each teammate takes one major feature area and cross-references all 9 raw dimension files to produce complete detail files. On re-runs, teammates operate in **verify mode** — auditing existing detail files against raw data and patching gaps rather than rewriting from scratch.
 
+### User Resolution Interview (Step 4.5)
+
+After synthesis, the orchestrator scans all detail files to identify features that are thin, ambiguous, overlapping, or orphaned. For each candidate, it presents the user with targeted questions and actionable options:
+
+- **Thin specs** — Define (provide context), Merge (into another feature), or Remove
+- **Overlapping features** — Keep both (clarify relationship), Merge, or Clarify the distinction
+- **Unresolved ambiguities** — Answer specific questions or skip (marked `[UNRESOLVED]`)
+- **Orphan behaviors** — Assign to correct parent, Define, or Remove
+
+This eliminates the "shallow feature" problem where downstream agents encounter vague specs and either skip them or hallucinate. Every feature in the final index is either fully specified, explicitly related to another feature, or honestly marked as unresolved.
+
 ## Agents
 
 | Agent | Purpose |
@@ -238,6 +253,7 @@ Agent Teams is token-intensive. Each teammate is a full Claude Code session. For
 - Analysis (9 dimensions x ~50k each): ~450k tokens across teammates
 - Coverage audit + gap filling: ~50k tokens
 - Synthesis (parallel): ~150k tokens across teammates
+- User resolution interview: ~20-50k tokens (depends on candidate count)
 - Index + validation: ~50k tokens
 
-Total: ~700k-800k tokens. Claude Max subscription recommended.
+Total: ~750k-850k tokens. Claude Max subscription recommended.

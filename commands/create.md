@@ -625,13 +625,29 @@ areas where original implementation was known to be problematic}
 
 ## Resume Behavior
 
-If re-run after `/clear` or interruption:
+On every run, **auto-clear derived synthesis artifacts** that are always regenerated.
+These are cheap to rebuild and may be stale if raw data changed:
+
+```bash
+rm -f ./feature-inventory-output/synthesis-plan.json
+rm -f ./feature-inventory-output/coverage-audit.json
+rm -f ./feature-inventory-output/FEATURE-INDEX.md
+rm -f ./feature-inventory-output/FEATURE-INDEX.json
+```
+
+**Do NOT clear:**
+- `details/` — verify mode patches these incrementally; clearing forces a full rebuild
+- `raw/` — the expensive analysis output
+- `interview.md`, `user-feature-map.md`, `clarifications.md` — user input
+- `discovery.json`, `plan.json` — reused if unchanged
+
+Then apply these resume rules:
 - Step 0: Skip if `interview.md` exists (load it for context).
 - Step 1: Re-run unless `discovery.json` exists.
 - Step 2: Re-run unless `plan.json` exists and discovery hasn't changed.
 - Step 3: Skip completed dimensions (check raw output files).
 - Step 3.5: Always re-run (fast — scripted audit).
-- Step 4a: Re-run unless `synthesis-plan.json` exists and all raw files are present.
+- Step 4a: Always re-run (synthesis-plan.json was cleared).
 - Step 4b: Run in **verify** mode for feature areas with existing detail files,
   **create** mode for those without. Never skip.
-- Step 4c: Always re-run to regenerate index from all available detail files.
+- Step 4c: Always re-run (indexes were cleared).

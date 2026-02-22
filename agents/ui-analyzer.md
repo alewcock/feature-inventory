@@ -245,9 +245,86 @@ responsive behavior}
 
 ## Execution Strategy
 
+### Pass 1: Build the File Manifest
+
+Before analyzing anything, build a complete list of ALL source files in your scope:
+
+1. Use `Glob` to find all component/view files.
+2. For each file, note its line count (use `wc -l` via Bash for a batch).
+3. Write the manifest to the top of your output file:
+
+```markdown
+## Source File Manifest
+| File | Lines | Status |
+|------|-------|--------|
+| src/js/remote/MusicPage.js | 2,341 | Pending |
+| src/js/remote/ControlCenter.js | 1,433 | Pending |
+| ... | ... | ... |
+```
+
+**Update the Status column as you process each file** (Pending → Done). This is your
+progress tracker and will be used by the coverage audit.
+
+### Pass 2: Pages and Screens
+
 1. Map all routes to get the complete screen list.
 2. Process each screen: read the component, extract layout, forms, tables, actions.
 3. For each form: trace validation rules from both frontend and API.
 4. For each table: find the data source and all column/sort/filter configs.
-5. Capture reusable components and note where they're used.
-6. Write incrementally per screen.
+5. Write incrementally per screen.
+
+### Pass 3: Shared and Reusable Components
+
+**After documenting all pages**, do a dedicated pass for shared components. These are
+the components most likely to be missed when analyzing page-by-page, because they
+don't belong to any single page.
+
+1. **Identify shared components** using these strategies:
+   - Files in directories named `shared/`, `common/`, `components/`, `lib/`, `utils/`
+   - Classes/components instantiated or imported by 2+ pages (Grep for `import` or
+     `new {ClassName}` across page files)
+   - Files in the manifest that weren't covered during Pass 2
+
+2. **For each shared component**, give it a **full dedicated section** (not a bullet
+   point under a page). Use the same depth as a page section:
+   - Component location and line count
+   - Full props/inputs table
+   - All internal states and behaviors
+   - Every method/handler with what it does
+   - All events emitted
+   - Every screen that uses it and how
+   - Embedded sub-components (recurse — if a shared component contains other components,
+     document each)
+
+3. **Cross-cutting UI primitives**: These deserve their own sections too:
+   - Alert/notification systems
+   - Volume/media controls
+   - Search components (especially if they behave differently per context)
+   - Modal/dialog managers
+   - Toast/snackbar systems
+   - Drag-and-drop handlers
+   - Keyboard shortcut managers
+
+### Pass 4: Coverage Self-Check
+
+Before finishing:
+
+1. Read back your Source File Manifest.
+2. Verify every file is marked as Done.
+3. For any file still marked Pending: analyze it now.
+4. For any file where your analysis section has fewer lines than
+   `ceil(source_lines / 50)`, expand your analysis — you likely under-documented it.
+5. If you're running low on context, flag remaining files as `## INCOMPLETE` rather
+   than writing shallow stubs.
+
+### Proportionality Rule
+
+**For each source file you analyze, your output must be proportional to its complexity:**
+- File <50 lines: minimum 3 lines of analysis
+- File 50-200 lines: minimum 5 lines of analysis
+- File 200-500 lines: minimum 10 lines of analysis
+- File >500 lines: minimum `ceil(source_lines / 50)` lines of analysis
+
+A 1,433-line component getting 1 line of output is a failure. If you cannot meet the
+minimum, flag the file as `## INCOMPLETE - {filename}` so the coverage audit catches it
+and the orchestrator re-queues it for a dedicated agent pass.

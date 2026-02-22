@@ -1,6 +1,10 @@
 # feature-inventory
 
+**v2.0.0**
+
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Produces a deeply decomposed, hierarchically structured specification designed for AI/agent teams to rebuild the entire product from scratch.
+
+New in v2: gap analysis command, improved synthesis with verify-and-improve mode, parallelized feature synthesis via Agent Teams, source coverage auditing, and automatic clearing of derived artifacts on re-run.
 
 ## Requirements
 
@@ -24,6 +28,12 @@ Or export in your shell: `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
 
 ## Installation
 
+### From GitHub directly
+
+```bash
+claude plugin add github:alewcock/feature-inventory
+```
+
 ### As a plugin marketplace (recommended for teams)
 
 Create your own marketplace or add this repo directly:
@@ -33,18 +43,22 @@ Create your own marketplace or add this repo directly:
 /plugin install feature-inventory@alewcock
 ```
 
-### From GitHub directly
-
-```bash
-claude plugin add github:alewcock/feature-inventory
-```
-
 ### Local development
 
 ```bash
 git clone https://github.com/alewcock/feature-inventory.git
 claude --plugin-dir ./feature-inventory
 ```
+
+### Updating
+
+To get the latest version, re-run the install command:
+
+```bash
+claude plugin add github:alewcock/feature-inventory
+```
+
+This overwrites the existing installation with the latest release.
 
 ## Purpose
 
@@ -53,6 +67,14 @@ When migrating a legacy product (10-20+ years) to new languages and platforms, y
 It interviews the user to capture tribal knowledge, then systematically analyzes the codebase across 9 dimensions in parallel using Agent Teams, and produces a hierarchical feature index where every entry links to a detailed specification file.
 
 **Nothing is too small.** A tooltip, a default sort order, a 3-line validation rule, a retry delay, a password complexity requirement, an error message string - if the product exhibits the behavior, it gets documented.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/feature-inventory:create [path]` | Run the full inventory analysis |
+| `/feature-inventory:gap-analysis [new-project] [inventory-path]` | Compare a new project against the inventory |
+| `/feature-inventory:status` | Check progress of inventory or gap analysis |
 
 ## What It Analyzes (9 Dimensions)
 
@@ -70,10 +92,10 @@ It interviews the user to capture tribal knowledge, then systematically analyzes
 
 ## Usage
 
-### Run the full inventory
+### Create a feature inventory
 
 ```
-/feature-inventory [path-to-repo-or-parent-directory]
+/feature-inventory:create [path-to-repo-or-parent-directory]
 ```
 
 The plugin will:
@@ -82,23 +104,36 @@ The plugin will:
 3. **Discover** the repo structure and tech stack
 4. **Analyze** all 9 dimensions in parallel via Agent Teams (batches of 5 teammates)
 5. **Ask clarifying questions** when teammates encounter ambiguity
-6. **Build the feature hierarchy** organized by your mental model
-7. **Generate detail files** for every feature and behavior
-8. **Validate** against your original feature map
+6. **Audit source coverage** to catch analysis gaps before synthesis
+7. **Build the feature hierarchy** with parallel synthesis via Agent Teams
+8. **Generate detail files** for every feature and behavior
+9. **Validate** against your original feature map
+
+### Run a gap analysis
+
+```
+/feature-inventory:gap-analysis [new-project-path] [inventory-path]
+```
+
+Compares a new or in-progress project against a completed feature inventory. For every sub-feature and behavior in the inventory, determines whether it is **DONE**, **PARTIAL**, or **NOT STARTED** in the new project. Produces a structured task list (Markdown and JSON) ordered by the inventory's suggested build order.
+
+Requires a completed feature inventory (`FEATURE-INDEX.json` must exist).
 
 ### Check progress
 
 ```
-/inventory-status
+/feature-inventory:status
 ```
 
-Shows which dimensions are complete, partial, pending, or failed.
+Shows plugin version, interview status, which dimensions are complete, coverage audit results, synthesis progress, and gap analysis status. Useful after a `/clear` or interruption to see where things stand before resuming.
 
 ### Resume after interruption
 
-Just run `/feature-inventory` again. It detects completed work and picks up where it left off. All progress is persisted to disk.
+Just run `/feature-inventory:create` again. It detects completed work and picks up where it left off. All progress is persisted to disk. Derived artifacts (synthesis plan, coverage audit, indexes) are automatically cleared and regenerated from the raw data.
 
 ## Output Structure
+
+### Feature Inventory
 
 ```
 feature-inventory-output/
@@ -112,12 +147,28 @@ feature-inventory-output/
 ├── interview.md               # User interview answers
 ├── user-feature-map.md        # User's mental model of features
 ├── clarifications.md          # Resolved ambiguities
+├── coverage-audit.json        # Source file coverage report
+├── synthesis-plan.json        # Feature-to-dimension mapping
 ├── raw/                       # Per-dimension analysis (intermediate)
 │   └── {repo-name}/
 │       ├── api-surface.md
 │       ├── data-models.md
 │       └── ...
 └── discovery.json, plan.json
+```
+
+### Gap Analysis
+
+```
+gap-analysis-output/
+├── GAP-ANALYSIS.md            # Human-readable report with task list
+├── GAP-ANALYSIS.json          # Machine-readable for agent orchestrators
+├── new-project-discovery.json # New project scan results
+├── plan.json                  # Analysis plan
+└── raw/                       # Per-feature-area gap reports
+    ├── F-001.md
+    ├── F-002.md
+    └── ...
 ```
 
 ### The Index
@@ -147,6 +198,26 @@ This means:
 - Failures are isolated (one dimension failing doesn't affect others)
 - Partial progress is always preserved on disk
 
+### Synthesis (Step 4)
+
+Feature synthesis is also parallelized via Agent Teams. Each teammate takes one major feature area and cross-references all 9 raw dimension files to produce complete detail files. On re-runs, teammates operate in **verify mode** — auditing existing detail files against raw data and patching gaps rather than rewriting from scratch.
+
+## Agents
+
+| Agent | Purpose |
+|-------|---------|
+| `api-analyzer` | API endpoints, request/response schemas, auth, errors |
+| `data-model-analyzer` | Entities, fields, types, constraints, relationships |
+| `ui-analyzer` | Pages, forms, tables, modals, validation messages, empty states |
+| `logic-analyzer` | Business rules, calculations, workflows, state machines |
+| `integration-analyzer` | Third-party services, SDKs, webhooks, retry policies |
+| `jobs-analyzer` | Scheduled tasks, queue workers, retry config |
+| `auth-analyzer` | Roles, permissions, enforcement points, session config |
+| `config-analyzer` | Env vars, config files, feature flags |
+| `events-analyzer` | Events, payload schemas, subscribers, middleware |
+| `feature-synthesizer` | Cross-references all dimensions to produce detail files (create/verify modes) |
+| `gap-analyzer` | Compares new project against inventory for one feature area |
+
 ## Customization
 
 ### Adding a new dimension
@@ -165,6 +236,8 @@ Agent Teams is token-intensive. Each teammate is a full Claude Code session. For
 - Interview: ~10k tokens
 - Discovery + Planning: ~20k tokens
 - Analysis (9 dimensions x ~50k each): ~450k tokens across teammates
-- Index + Detail generation: ~100k tokens
+- Coverage audit + gap filling: ~50k tokens
+- Synthesis (parallel): ~150k tokens across teammates
+- Index + validation: ~50k tokens
 
-Total: ~500k-600k tokens. Claude Max subscription recommended.
+Total: ~700k-800k tokens. Claude Max subscription recommended.

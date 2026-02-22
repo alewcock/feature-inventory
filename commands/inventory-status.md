@@ -63,7 +63,7 @@ Ambiguities resolved: {N}
 
 Index: {generated with N detail files / not generated}
 
-To resume: run /feature-inventory:work
+To resume: run /feature-inventory:create
 ```
 
 9. **Gap analysis status:** Check if `./gap-analysis-output/` exists. If so:

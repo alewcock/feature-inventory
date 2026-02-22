@@ -583,6 +583,176 @@ Each teammate runs in one of two modes depending on whether prior output exists.
 6. **After each batch:** Verify detail files exist for the completed feature areas.
    If a teammate failed or produced partial output, re-queue.
 
+### 4.5: User Resolution Interview (Mandatory — Blocks 4c)
+
+After synthesis, some features will be thin, ambiguous, or redundant. These are **worse
+than gaps** for downstream agents — an agent that encounters a vague spec will either skip
+it (creating a gap) or hallucinate around it (creating wrong behavior). This step resolves
+every ambiguous item through targeted user questions.
+
+#### 4.5a: Identify Candidates for Resolution
+
+Scan all detail files produced in 4b to find items that need user input. A feature is a
+**resolution candidate** if any of these apply:
+
+1. **Thin spec** — The detail file for a sub-feature has fewer than 10 lines of substantive
+   content (excluding headers, boilerplate, and empty sections). A behavior file with only
+   a name and one sentence of description is thin.
+
+2. **Majority-empty sections** — A sub-feature detail file where 5+ of the 9 dimension
+   sections are empty or contain only "None identified" / "N/A". This suggests the
+   synthesizer couldn't find enough raw data to characterize the feature.
+
+3. **Ambiguity markers** — Any detail file containing `[AMBIGUOUS]` tags that weren't
+   resolved in `clarifications.md` during Step 3.
+
+4. **Overlapping scope** — Two or more sub-features whose descriptions, data models, or
+   API endpoints substantially overlap. Detected by scanning for:
+   - Same entity names appearing in multiple sub-features under different parents
+   - Same API endpoints referenced in multiple sub-features
+   - Near-identical behavior descriptions across features
+
+5. **Orphan behaviors** — Behaviors that reference entities, endpoints, or events not
+   defined in any other feature's detail file. These may be misclassified.
+
+Build a resolution list:
+```json
+{
+  "candidates": [
+    {
+      "type": "thin",
+      "feature_id": "F-003.04",
+      "name": "Report Scheduling",
+      "detail_file": "details/F-003.04.md",
+      "reason": "Only 6 lines of content across 9 dimension sections",
+      "behaviors_affected": ["F-003.04.01", "F-003.04.02"]
+    },
+    {
+      "type": "overlap",
+      "features": ["F-001.03", "F-005.02"],
+      "reason": "Both reference UserPreferences entity and PATCH /api/preferences endpoint",
+      "detail_files": ["details/F-001.03.md", "details/F-005.02.md"]
+    },
+    {
+      "type": "ambiguous",
+      "feature_id": "F-007.01",
+      "name": "Notification Routing",
+      "detail_file": "details/F-007.01.md",
+      "reason": "3 unresolved [AMBIGUOUS] tags",
+      "ambiguities": ["Channel selection logic unclear", "Retry policy not in code", "Priority levels undocumented"]
+    }
+  ]
+}
+```
+
+#### 4.5b: Present Candidates and Interview the User
+
+For each candidate, ask the user a targeted question with three possible outcomes:
+
+**For thin specs:**
+```
+F-003.04 (Report Scheduling) has a thin specification — the automated analysis
+couldn't extract enough detail to make it implementable.
+
+Options:
+  [Define]  — Tell me what this feature does and I'll flesh out the spec
+  [Merge]   — This is actually part of another feature (which one?)
+  [Remove]  — This isn't a real feature / not needed in the rebuild
+```
+
+**For overlapping features:**
+```
+F-001.03 (User Preferences) and F-005.02 (Dashboard Customization) both reference
+the same UserPreferences entity and PATCH /api/preferences endpoint.
+
+Options:
+  [Keep both]   — They're distinct features that share infrastructure
+  [Merge into]  — Combine them (which one is the parent?)
+  [Clarify]     — Let me explain the distinction so you can update the specs
+```
+
+**For ambiguous items:**
+```
+F-007.01 (Notification Routing) has 3 unresolved ambiguities:
+  1. Channel selection logic — how does the system pick email vs push vs SMS?
+  2. Retry policy — what happens when a notification delivery fails?
+  3. Priority levels — are there priority tiers? How do they affect delivery?
+
+Please answer what you can. Say "skip" for any you're unsure about.
+```
+
+**For orphan behaviors:**
+```
+F-004.02.03 (Archive Audit Log Entry) references an AuditLog entity that
+doesn't appear in any other feature's data model.
+
+Options:
+  [Assign]  — It belongs under feature ___ (tell me which)
+  [Define]  — It's a real entity, let me describe it
+  [Remove]  — It's dead code / not needed
+```
+
+#### 4.5c: Apply Resolutions
+
+For each user response:
+
+- **Define**: Take the user's explanation and use it to rewrite or enrich the detail
+  file(s) and their behavior files. Use `Edit` to surgically update — don't regenerate
+  from scratch. Add the user's context to the appropriate dimension sections.
+
+- **Merge**: Combine the features:
+  1. Pick the surviving feature ID (user chooses, or use the one with more content).
+  2. Move unique behaviors from the absorbed feature into the survivor.
+  3. Update the survivor's detail file with any additional content from the absorbed one.
+  4. Delete the absorbed feature's detail file and its behavior files.
+  5. Update any cross-references in other features that pointed to the absorbed ID.
+
+- **Remove**: Delete the feature's detail file and all its behavior files. Note the
+  removal in `clarifications-features.md` with the reason so future runs don't
+  recreate it.
+
+- **Keep both** (overlaps): Add a `## Relationship` section to both detail files
+  explaining the distinction. This prevents downstream agents from being confused
+  by the shared infrastructure.
+
+- **Clarify** (overlaps): Take the user's explanation and add it as a `## Relationship`
+  section to both files. Update data model / API sections if the user identified which
+  feature owns the shared entities.
+
+- **Assign** (orphans): Move the behavior to the correct parent feature. Update both
+  the source and destination detail files.
+
+- **Skip** (ambiguities): Mark the ambiguity as `[UNRESOLVED — user unsure]` in the
+  detail file. This is honest — downstream agents know not to guess.
+
+Save all resolutions to `./feature-inventory-output/clarifications-features.md` with
+the feature ID, resolution type, and user's explanation for each.
+
+#### 4.5d: Batch Processing
+
+Present candidates to the user in batches of 5-8 to avoid overwhelming them. Group
+related candidates together (e.g., all overlaps in one batch, then thin specs, then
+ambiguities). After each batch:
+
+1. Apply the resolutions immediately.
+2. Re-check whether any resolutions created new overlaps or orphans (e.g., a merge
+   might expose a new overlap with a third feature).
+3. Present the next batch.
+
+After all candidates are resolved, present a summary:
+```
+Resolution Summary:
+  Defined (enriched):     {N} features
+  Merged:                 {N} features absorbed → {N} survivors
+  Removed:                {N} features
+  Overlaps clarified:     {N} pairs
+  Orphans reassigned:     {N} behaviors
+  Ambiguities resolved:   {N}
+  Ambiguities unresolved: {N} (marked [UNRESOLVED — user unsure])
+
+Proceeding to build the master index...
+```
+
 ### 4c: Build the Index (Orchestrator — after all teammates finish)
 
 Once all synthesis teammates have completed:
@@ -673,12 +843,16 @@ areas where original implementation was known to be problematic}
 ## Step 5: Validation & Summary
 
 1. **Cross-check against user's feature map.** Every feature they mentioned should appear.
-   Flag any missing.
-2. **Count check.** Report totals by tier.
+   Flag any missing. Account for features removed or merged in Step 4.5 — these are
+   expected absences, not gaps.
+2. **Count check.** Report totals by tier. Include before/after counts from Step 4.5
+   resolutions (e.g., "87 sub-features → 82 after 3 merges and 2 removals").
 3. **Coverage check.** Any raw outputs that didn't map to features?
 4. **Orphan check.** Any code that doesn't seem to belong to any feature?
-5. **Present summary** with counts, coverage, unresolved ambiguities, and file locations.
-6. **Ask the user** to review the index and flag anything missing or miscategorized.
+5. **Resolution check.** Report any remaining `[UNRESOLVED — user unsure]` markers from
+   Step 4.5. These are known ambiguities that downstream agents should handle defensively.
+6. **Present summary** with counts, coverage, unresolved ambiguities, and file locations.
+7. **Ask the user** to review the index and flag anything missing or miscategorized.
 
 ## Resume Behavior
 
@@ -696,7 +870,7 @@ rm -f ./feature-inventory-output/FEATURE-INDEX.json
 **Do NOT clear:**
 - `details/` — verify mode patches these incrementally; clearing forces a full rebuild
 - `raw/` — the expensive analysis output
-- `interview.md`, `user-feature-map.md`, `clarifications.md` — user input
+- `interview.md`, `user-feature-map.md`, `clarifications.md`, `clarifications-features.md` — user input
 - `discovery.json`, `plan.json` — reused if unchanged
 
 Then apply these resume rules:
@@ -709,4 +883,7 @@ Then apply these resume rules:
 - Step 4a: Always re-run (synthesis-plan.json was cleared).
 - Step 4b: Run in **verify** mode for feature areas with existing detail files,
   **create** mode for those without. Never skip.
+- Step 4.5: Skip if `clarifications-features.md` exists — resolutions are already
+  applied to detail files. If detail files were regenerated (4b ran in create mode
+  for any feature), re-run 4.5 for those features only.
 - Step 4c: Always re-run (indexes were cleared).

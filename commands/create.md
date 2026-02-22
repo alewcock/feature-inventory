@@ -320,31 +320,47 @@ not content. The synthesis-plan.json is the handoff to teammates.
 ### 4b: Synthesize Detail Files via Agent Teams (Parallel)
 
 This mirrors the Step 3 pattern: spawn teammates to do the heavy lifting in parallel.
+Each teammate runs in one of two modes depending on whether prior output exists.
 
-1. **Check for existing output:** If `./feature-inventory-output/details/{feature_id}.md`
-   exists for a feature area, check if its sub-feature and behavior files also exist.
-   If complete, skip that feature area.
+1. **Determine mode for each feature area:**
+   - If `./feature-inventory-output/details/{feature_id}.md` does NOT exist:
+     **mode = "create"** — build from scratch.
+   - If `./feature-inventory-output/details/{feature_id}.md` EXISTS:
+     **mode = "verify"** — audit existing files against raw data and patch gaps.
 
-2. **Create tasks** via `TaskCreate` for each pending feature area.
+   **Never skip a feature area.** Even if files exist, they may be incomplete. The
+   verify mode checks them against the raw outputs and fills in what's missing.
+
+2. **Create tasks** via `TaskCreate` for each feature area (all of them).
 
 3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE major feature area.
    Assign each the `feature-inventory:feature-synthesizer` agent.
 
 4. **Each teammate receives** via its task description:
+   - **`mode`**: `"create"` or `"verify"` (determined in step 1)
    - The feature ID, name, and sub-feature list from synthesis-plan.json
    - The section_hints for each sub-feature (so they know where to look in raw files)
    - The raw output path and list of repos
    - The detail file output path (`./feature-inventory-output/details/`)
    - The product context (brief summary from interview)
    - A pointer to read `references/context-management.md` before starting
-   - This instruction verbatim: **"For each sub-feature, read from ONE raw dimension
-     file at a time using the section hints to find the right location. Extract what
-     you need, then move to the next dimension. After gathering from all dimensions,
-     write the sub-feature detail file and all its behavior detail files. Write each
-     file IMMEDIATELY — do not accumulate. Decompose to atomic behaviors: every
-     validation rule, every error path, every side effect, every default value is its
-     own behavior. If the raw data describes 12 distinct things in a flow, that's 12
-     behaviors, not 1."**
+   - For **create mode**, this instruction verbatim: **"For each sub-feature, read from
+     ONE raw dimension file at a time using the section hints to find the right
+     location. Extract what you need, then move to the next dimension. After gathering
+     from all dimensions, write the sub-feature detail file and all its behavior detail
+     files. Write each file IMMEDIATELY — do not accumulate. Decompose to atomic
+     behaviors: every validation rule, every error path, every side effect, every
+     default value is its own behavior. If the raw data describes 12 distinct things
+     in a flow, that's 12 behaviors, not 1."**
+   - For **verify mode**, this instruction verbatim: **"Existing detail files were
+     produced by a previous run and may be incomplete. For each sub-feature: read the
+     existing detail file, then cross-check it against EVERY raw dimension file using
+     the section hints. Find gaps: missing entities, missing endpoints, missing business
+     rules, missing events, missing config, missing behaviors. Patch the gaps using
+     Edit — don't rewrite files from scratch, surgically add what's missing. Create
+     new behavior files for any behaviors found in the raw data that have no
+     corresponding detail file. Every validation rule, error path, side effect, and
+     default value should have its own behavior file."**
 
 5. **Wait for each batch to finish** before spawning the next.
 
@@ -455,7 +471,8 @@ If re-run after `/clear` or interruption:
 - Step 1: Re-run unless `discovery.json` exists.
 - Step 2: Re-run unless `plan.json` exists and discovery hasn't changed.
 - Step 3: Skip completed dimensions (check raw output files).
+- Step 3.5: Always re-run (fast — scripted audit).
 - Step 4a: Re-run unless `synthesis-plan.json` exists and all raw files are present.
-- Step 4b: Skip feature areas whose detail files are already complete (check for
-  major feature file + all expected sub-feature files).
+- Step 4b: Run in **verify** mode for feature areas with existing detail files,
+  **create** mode for those without. Never skip.
 - Step 4c: Always re-run to regenerate index from all available detail files.

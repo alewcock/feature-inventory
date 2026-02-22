@@ -4,7 +4,8 @@ description: >
   Takes a single major feature area and the raw dimension outputs, cross-references
   all dimensions (API, data models, UI, business logic, auth, events, jobs, integrations,
   config) to produce complete detail files for every sub-feature and behavior in that
-  feature area. This is the raw-to-index transformation step.
+  feature area. Supports two modes: "create" for new synthesis and "verify" for checking
+  existing detail files against raw outputs and patching gaps.
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Agent, TeamCreate, TaskCreate, TaskUpdate, TaskList, SendMessage
 ---
 
@@ -20,6 +21,10 @@ area from ALL dimensions and produce structured detail files.
 ## Input
 
 You will receive:
+- `mode`: Either `"create"` or `"verify"`
+  - **create**: No existing detail files. Build everything from scratch.
+  - **verify**: Existing detail files from a previous run. Check them against the raw
+    outputs, find gaps, and patch missing information.
 - `feature_id`: The major feature ID (e.g., "F-001")
 - `feature_name`: The major feature name (e.g., "User Management")
 - `sub_features`: List of sub-feature names assigned to this feature area
@@ -45,7 +50,17 @@ producing many output files. You WILL exhaust context if you're not disciplined.
    tell you what to search for.
 5. **Never read more than ~150 lines from a raw file at once.** Use line ranges.
 
-## Synthesis Process
+## Mode Selection
+
+Check your `mode` input and follow the appropriate workflow:
+
+- **`create` mode**: Follow the **Synthesis Process** below (build from scratch).
+- **`verify` mode**: Follow the **Verify and Improve Process** below (audit existing
+  files and patch gaps).
+
+---
+
+## Synthesis Process (create mode)
 
 ### Phase 1: Write the Major Feature File
 
@@ -187,7 +202,7 @@ email is required, but data model has email as nullable. Need clarification.`
 
 ## Completeness Check
 
-Before finishing each sub-feature, verify:
+Before finishing each sub-feature (in either mode), verify:
 - [ ] Every entity mentioned in data-models is referenced in the sub-feature file
 - [ ] Every endpoint from api-surface that serves this sub-feature is included
 - [ ] Every UI screen/component from ui-screens is included
@@ -197,3 +212,110 @@ Before finishing each sub-feature, verify:
 - [ ] Auth requirements are specified
 - [ ] External integrations are documented
 - [ ] Behaviors decomposed to atomic level (no behavior covers more than one distinct action)
+
+---
+
+## Verify and Improve Process (verify mode)
+
+Existing detail files were produced by a previous run but may be incomplete — missing
+information that IS in the raw dimension outputs. Your job is to audit every existing
+file against the raw data and patch whatever's missing.
+
+### Phase 1: Inventory Existing Files
+
+1. Use `Glob` to find all existing detail files for your feature area:
+   ```
+   Glob: {output_path}/{feature_id}*.md
+   ```
+2. Build a list of what exists:
+   - Major feature file: `{feature_id}.md`
+   - Sub-feature files: `{feature_id}.01.md`, `{feature_id}.02.md`, etc.
+   - Behavior files: `{feature_id}.01.01.md`, `{feature_id}.01.02.md`, etc.
+3. Note any sub-features from the `sub_features` input that have NO corresponding file
+   (these need full creation, not just verification).
+
+### Phase 2: Verify and Patch Each Sub-Feature
+
+For each sub-feature, one at a time:
+
+#### 2a: Read the existing sub-feature file
+
+Read the existing `{feature_id}.{sub_id}.md` file. Note what sections it has and
+roughly what content is in each:
+- Does it have a Data Model section? How many entities/fields?
+- Does it have API Contracts? How many endpoints?
+- Does it have UI Specification? How detailed?
+- Does it have Business Rules? How many rules?
+- Does it have Events, Dependencies, Configuration, Auth sections?
+- How many behaviors are listed in the Behaviors table?
+
+#### 2b: Cross-check against each raw dimension
+
+Go dimension by dimension, just like create mode. For each dimension:
+
+1. **Grep the raw file** using section_hints to find the relevant section.
+2. **Read that section** (with line ranges, max ~150 lines).
+3. **Compare against what's in the existing detail file:**
+   - Are there entities/fields in the raw that are missing from the detail file?
+   - Are there endpoints in the raw that aren't listed in the detail file?
+   - Are there business rules in the raw that aren't captured?
+   - Are there events, config vars, auth details in the raw but not the detail file?
+4. **Track all gaps** found for this sub-feature.
+
+#### 2c: Check behavior coverage
+
+1. List the behaviors in the existing sub-feature file's Behaviors table.
+2. Compare against what the raw data describes. Look for:
+   - **Missing behaviors**: Things in the raw data with no corresponding behavior file.
+     Common misses: individual validation rules, specific error paths, side effects
+     (emails, events), default value assignments, rate limits, edge cases that are
+     distinct enough to be their own behavior.
+   - **Under-specified behaviors**: Behavior files that exist but are thin — missing
+     edge cases, error states, defaults, or test cases that the raw data documents.
+   - **Missing behavior files**: Behaviors listed in the sub-feature table but with
+     no corresponding `.md` file in the details directory.
+
+#### 2d: Patch the gaps
+
+For each gap found:
+
+- **Missing section content** (e.g., no events section, or data model is incomplete):
+  Use `Edit` to add the missing information to the existing sub-feature file. Don't
+  rewrite the whole file — surgically add what's missing.
+
+- **Missing behaviors**: Create new behavior files. Assign the next available behavior
+  ID (e.g., if `F-001.01.05` is the last existing behavior, new ones start at
+  `F-001.01.06`). Also update the sub-feature file's Behaviors table to include them.
+
+- **Under-specified behavior files**: Use `Edit` to add missing edge cases, error
+  states, defaults, or test cases to existing behavior files.
+
+- **Entirely missing sub-feature**: If a sub-feature has no file at all, fall back to
+  the full create-mode workflow (Phase 2 of the Synthesis Process) for that sub-feature.
+
+#### 2e: Move to next sub-feature
+
+After patching all gaps for a sub-feature, move to the next. Don't revisit.
+
+### Phase 3: Verify the Major Feature File
+
+1. Read the existing `{feature_id}.md`.
+2. Check that its Sub-Features table lists ALL sub-features (including any new ones
+   created during patching).
+3. Check that Cross-Cutting Dependencies are accurate and complete.
+4. Patch if needed using `Edit`.
+
+### Phase 4: Report
+
+After all sub-features are verified and patched:
+
+```
+Feature {feature_id} ({feature_name}) verification complete.
+- Sub-features verified: {N}
+- Sub-features created (were missing): {N}
+- Behaviors added: {N}
+- Behaviors improved: {N}
+- Sections patched: {N}
+- Total detail files now: {N}
+- Ambiguities found: {N}
+```

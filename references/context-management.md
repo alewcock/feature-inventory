@@ -451,6 +451,76 @@ the end and crashes at minute 12, ALL work is lost. If it writes every 5 items o
 
 **Target: no more than 3 minutes of work should ever be lost from a teammate crash.**
 
+## Agent Liveness Protocol
+
+### The Problem
+
+When the orchestrator monitors agents via TaskList, it cannot distinguish between
+"agent is actively working" and "agent is stuck/dead." Without a heartbeat signal,
+the orchestrator may assume an agent is dead and move on — wasting every token the
+agent spent. Conversely, it may wait indefinitely for a stuck agent.
+
+### Heartbeat Rules (Teammates)
+
+Every teammate MUST write heartbeat markers to their output file at regular intervals:
+
+1. **Write a heartbeat line every 2 minutes** to your JSONL output file:
+   ```json
+   {"heartbeat": true, "timestamp": "2024-01-15T10:32:00Z", "items_completed": 5, "items_remaining": 12}
+   ```
+   For Markdown output files, append a comment line:
+   ```markdown
+   <!-- heartbeat: 2024-01-15T10:32:00Z | items_completed: 5 | items_remaining: 12 -->
+   ```
+
+2. **Write a heartbeat before any long operation** (reading a large file, running a
+   complex query, grepping a large codebase). This tells the orchestrator "I'm about
+   to do something that takes a while — I'm not stuck."
+
+3. **Write a final summary line** when you're done. The orchestrator uses this to
+   distinguish "completed" from "died mid-work."
+
+### Liveness Monitoring (Orchestrator)
+
+The orchestrator MUST check agent output files before making any liveness determination:
+
+1. **Check output file modification time** before assuming an agent is dead:
+   ```bash
+   stat -c %Y intermediate/connections--src-services-order-ts.jsonl
+   ```
+
+2. **Liveness thresholds:**
+
+   | Output File Age | Status | Action |
+   |----------------|--------|--------|
+   | Modified < 3 min ago | **Alive** | Continue waiting. Do not poll excessively. |
+   | Modified 3-5 min ago | **Slow** | Log a note. Continue waiting. |
+   | Modified 5-10 min ago | **Possibly stuck** | Check TaskList status. If task shows "in_progress", continue waiting — the agent may be doing a long grep. |
+   | Modified > 10 min ago | **Likely dead** | Check TaskList status. If task shows "completed" but no summary line in output, the agent crashed. If task shows "in_progress", wait one more cycle (2 min) then flag for user. |
+
+3. **NEVER kill an agent whose output file was modified in the last 5 minutes.**
+   An agent that is actively writing is an agent that is working. Killing it wastes
+   every token it has spent.
+
+4. **When an agent appears stuck (>10 min no output, task still "in_progress"):**
+   - Present to the user: "Agent for {file} hasn't written output in {N} minutes.
+     It may be stuck on a complex file or a slow grep. Wait longer or cancel?"
+   - Do NOT automatically cancel. Let the user decide.
+
+5. **When an agent dies (task shows "failed" or "completed" with no summary line):**
+   - Check what partial output exists in the JSONL file.
+   - Add the file back to the pending list for the next batch.
+   - Do NOT discard partial output — the next agent for this file should read it
+     and continue from where the previous agent stopped.
+
+### Why File Modification Time?
+
+TaskList status is unreliable for liveness — a task can show "in_progress" whether
+the agent is actively working or stuck in an infinite loop. The output file modification
+time is the ground truth: if the agent is writing, it's working. If it hasn't written
+in 10 minutes, something is wrong. This is simple, requires no extra infrastructure,
+and works with the existing JSONL write pattern.
+
 ## Failure Recovery
 
 If you're spawned and the output file already has partial content:

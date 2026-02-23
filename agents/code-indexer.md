@@ -243,6 +243,10 @@ on what each type captures.
 **C / C++:** `function_definition`, `function_declaration`, `class_specifier`,
 `struct_specifier`, `preproc_include`, `preproc_def`
 
+**SQL / MySQL:** `create_table_statement`, `create_function_statement`,
+`create_procedure_statement`, `create_trigger_statement`, `create_view_statement`,
+`create_index_statement`, `column_definition`, `foreign_key_constraint`
+
 ### Extraction Approach
 
 The extraction script is a single Python file that:
@@ -414,6 +418,34 @@ These are flagged as `connection_hints` for the connection hunter.
   `respondsToSelector:`) means many connections are invisible to static indexing.
   Flag ALL `performSelector:`, `respondsToSelector:`, `NSClassFromString`,
   `NSSelectorFromString` for the connection hunter.
+
+### SQL / MySQL
+- **Tables:** `CREATE TABLE name`, `ALTER TABLE name` — record every column
+  (name, type, nullability, default, constraints)
+- **Views:** `CREATE VIEW name AS` — record as a derived symbol referencing its
+  source tables
+- **Stored Procedures:** `CREATE PROCEDURE name(`, `DELIMITER //` blocks — record
+  parameters, body calls to other procedures, and DML operations (which tables are
+  read/written)
+- **Functions:** `CREATE FUNCTION name(` — record parameters, return type, determinism
+  (`DETERMINISTIC` / `NOT DETERMINISTIC`)
+- **Triggers:** `CREATE TRIGGER name BEFORE|AFTER INSERT|UPDATE|DELETE ON table` —
+  record timing, event, table, and body operations. **Always flag as `connection_hint`
+  type `db_hook`** — triggers are indirect connections invisible to application code
+- **Indexes:** `CREATE INDEX name ON table(columns)`, `CREATE UNIQUE INDEX` — record
+  index name, table, columns, uniqueness
+- **Foreign Keys:** `FOREIGN KEY (col) REFERENCES other_table(col)` — record as a
+  relationship between tables, with ON DELETE/ON UPDATE actions
+- **Events:** `CREATE EVENT name ON SCHEDULE` — record as scheduled job entry points
+  (flag for graph builder)
+- **Constants:** `SET @variable =`, session/global variable assignments
+- **Imports:** None (SQL has no import system). Cross-file references are implicit
+  via table/procedure names — the cross-reference pass must match these by name.
+- **NOTE:** SQL files may be migration files (versioned schema changes) or
+  persistent definitions (stored procedures, views). Record both. For migration
+  files, record the final state of each table after all migrations are applied
+  if determinable; otherwise record each migration as a separate symbol with a
+  `migration_order` field.
 
 ## Handling Untyped / Dynamic Languages
 

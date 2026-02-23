@@ -1,51 +1,53 @@
 ---
 name: connection-hunter
 description: >
-  Relentlessly searches for every indirect connection in a codebase: event emitter/listener
-  pairs, IPC channels, pub/sub topics, DB triggers, observable/reactive chains, dynamic
-  dispatch, framework DI wiring, webhook routing, and any other mechanism where code
-  communicates without a direct function call. Enriches the code reference index with edges
-  that mechanical indexing cannot detect. Conducts dynamic user interviews when connections
-  cannot be resolved.
+  Hunts for every indirect connection in or out of a single assigned file: event
+  emitter/listener pairs, IPC channels, pub/sub topics, DB triggers, observable/reactive
+  chains, dynamic dispatch, framework DI wiring, webhook routing, and any other mechanism
+  where code communicates without a direct function call. Each hunter gets ONE file and
+  finds every connection the mechanical indexer missed. Documents each connection in the
+  index immediately, then reports back and terminates.
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 
 # Connection Hunter
 
-You are hunting for every indirect connection in a codebase — the edges that mechanical
-indexing misses. These are the most important connections in any system because they're
-the hardest to find and the easiest to break during a rebuild. Event emitters, IPC channels,
-pub/sub topics, DB triggers, observable chains, DI wiring — if code A causes code B to
-execute without a direct function call, you must find and document that edge.
+You are hunting for every indirect connection **in or out of your assigned file** — the
+edges that tree-sitter indexing misses. These are the most important connections in any
+system because they're the hardest to find and the easiest to break during a rebuild.
+Event emitters, IPC channels, pub/sub topics, DB triggers, observable chains, DI wiring —
+if code in your file causes code elsewhere to execute without a direct function call (or
+vice versa), you must find and document that edge.
 
-**Be relentless.** A missed indirect connection means a broken feature in the rebuild.
-Every string key, every channel name, every topic, every signal must be matched to its
-consumers. When you can't make the connection, interview the user — don't guess.
+**Your scope is ONE file.** Find every indirect connection that touches your file — either
+originating from it or targeting it. Document each connection as you find it. When you're
+done, report back and terminate. You do NOT search the entire codebase for all patterns —
+only the patterns relevant to your assigned file.
 
 **Read `references/context-management.md` before starting.**
 
 ## Input
 
 You will receive:
+- `file_path`: The specific source file you are hunting connections for
 - `repo_path`: Absolute path to the repository
-- `scope`: "full" or comma-separated directories
-- `db_path`: Path to the SQLite database (code-reference-index.db from code-indexer)
+- `db_path`: Path to the SQLite database (graph.db with tree-sitter index)
 - `output_path`: Where to write discovered connections (JSONL intermediate)
 - `languages`: Primary languages in scope
 - `frameworks`: Detected frameworks
-- `connection_hints`: The `connection_hints` array from the code-indexer output
-  (dynamic calls, framework magic, etc. that need resolution)
+- `connection_hints`: The `connection_hints` from the code-indexer output **for this
+  file only** (dynamic calls, framework magic, etc. flagged during tree-sitter indexing)
 - `product_context`: Brief summary of what this product does
 
 ## Context Window Discipline
 
-- **Hunt ONE connection pattern at a time.** Complete all instances of event emitters
-  before moving to IPC channels, etc.
+- **Your scope is bounded.** Read your assigned file, find connection patterns, then
+  Grep the codebase for their counterparts. This is fast because you know exactly
+  what strings to search for.
 - **Never hold more than ~200 lines of source in context at once.**
-- **Write after every resolved connection group** (e.g., after matching all listeners
-  for one event name).
-- **Use Grep extensively.** Most connection hunting is string matching — find every
-  occurrence of an event name, channel name, or topic string across the codebase.
+- **Write after every resolved connection** — append to JSONL immediately.
+- **Write a heartbeat line every 2 minutes** to signal liveness to the orchestrator:
+  `{"heartbeat": true, "timestamp": "...", "connections_found": N, "patterns_remaining": M}`
 - **Batch unresolvable connections** for user interview (max 10 per batch).
 
 ## Connection Types to Hunt
@@ -431,7 +433,58 @@ The orchestrator will present these to the user and feed resolutions back.
 
 ## Execution Strategy
 
-Process connection types in this order (most critical first):
+You have ONE file. Process it completely, then terminate.
+
+### Phase 1: Read your file and the index
+
+1. **Read your assigned file** to understand its contents (use line ranges for files >200 lines).
+2. **Query the index** for symbols in your file:
+   ```sql
+   SELECT * FROM symbols WHERE file = ?;
+   SELECT * FROM calls WHERE caller_id IN (SELECT id FROM symbols WHERE file = ?);
+   SELECT * FROM connection_hints WHERE file = ? AND resolved = 0;
+   ```
+3. **Identify which connection patterns exist in your file.** Not all files have
+   indirect connections — if your file has none, report back immediately.
+
+### Phase 2: Hunt connections originating FROM your file
+
+For each indirect connection pattern found in your file:
+
+1. **Extract the connection key** (event name, channel name, topic string, etc.).
+2. **Grep the codebase for the counterpart** (listener, subscriber, handler, etc.)
+   using the specific string key.
+3. **Record each matched connection** immediately (append to JSONL).
+4. **Flag unmatched patterns** for user interview.
+
+### Phase 3: Hunt connections targeting your file
+
+1. **Identify sink patterns in your file** (listeners, subscribers, handlers, etc.).
+2. **Extract the connection key** from each sink.
+3. **Grep the codebase for the source** (emitter, publisher, sender, etc.).
+4. **Record each matched connection** immediately.
+5. **Flag unmatched sinks** for user interview.
+
+### Phase 4: Resolve connection hints
+
+Process each `connection_hint` flagged by tree-sitter for your file:
+1. **`dynamic_call`**: Try to resolve by finding where the variable/key is set.
+2. **`string_key_dispatch`**: Build the dispatch table (see pattern 11).
+3. **`framework_magic`**: Resolve using the appropriate framework pattern.
+4. **`reflection`**: Enumerate possible values if bounded.
+
+### Phase 5: Report and terminate
+
+1. **Write final summary line** to output:
+   ```json
+   {"summary": true, "file": "...", "connections_found": N, "unresolved": M, "hints_resolved": K}
+   ```
+2. **Terminate.** Do not continue to other files.
+
+### Connection type priority within your file
+
+When your file contains multiple connection patterns, process them in this order
+(most critical first):
 
 1. **Event emitter ↔ listener pairs** — highest fan-out potential
 2. **IPC channels** — critical for multi-process architectures
@@ -444,15 +497,6 @@ Process connection types in this order (most critical first):
 9. **Convention-based routing** — framework-specific implicit wiring
 10. **String-keyed dispatch** — internal routing tables
 11. **File watchers & signals** — system-level triggers
-12. **Code-indexer connection hints** — resolve flagged items last (they need context from the above)
-
-For each type:
-1. Grep for ALL instances of the relevant patterns across the entire scope.
-2. Extract string keys / names from each instance.
-3. Match emitters to consumers by key.
-4. Record the connection.
-5. Flag unmatched items for user interview.
-6. **Write to disk after completing each connection type.**
 
 ## Output Format
 

@@ -123,23 +123,8 @@ work across agent teams.
           "output": "intermediate/index--shared.jsonl"
         }
       ],
-      "connection_hunting_splits": [
-        {
-          "connection_types": ["event", "ipc", "reactive"],
-          "scope": "full",
-          "output": "intermediate/connections--events-ipc-reactive.jsonl"
-        },
-        {
-          "connection_types": ["db_hook", "middleware_chain", "di_binding", "convention"],
-          "scope": "full",
-          "output": "intermediate/connections--framework.jsonl"
-        },
-        {
-          "connection_types": ["pubsub", "webhook", "dispatch_table", "file_watcher", "signal"],
-          "scope": "full",
-          "output": "intermediate/connections--external.jsonl"
-        }
-      ]
+      "connection_hunting_strategy": "per_file",
+      "connection_hunting_note": "File assignments determined after indexing (Step 3d) by querying connection_hints table and grepping for connection patterns. Each agent gets ONE file."
     }
   ],
   "exclude_patterns": ["node_modules", "vendor", ".Designer.cs"]
@@ -155,11 +140,16 @@ For indexing:
 - Very large files (>1,000 lines) get their own dedicated indexing task.
 
 For connection hunting:
-- Split by connection TYPE, not by directory. Connection hunting must search the
-  entire codebase for matching string keys — splitting by directory would miss
-  cross-module connections.
-- Group related connection types (events + IPC + reactive are all "indirect
-  invocation"; middleware + DI + convention are all "framework wiring").
+- Split by FILE, not by connection type. Each agent gets ONE file and hunts for
+  ALL connection types in or out of that file. The agent knows exactly what strings
+  to Grep for (event names, channel names, topic strings) so cross-module matching
+  is fast — bounded by the patterns in that one file, not by scanning the entire
+  codebase for every pattern category.
+- File assignments are determined AFTER indexing completes (Step 3d), by querying
+  the `connection_hints` table and grepping for known connection patterns. Only files
+  with connection patterns get an agent — pure logic files are skipped.
+- Connections span files and will be discovered from both ends (the emitter file's
+  agent and the listener file's agent). The merge step deduplicates.
 
 Write to `./docs/features/plan.json`.
 
@@ -252,36 +242,78 @@ Preserved files: `interview.md`, `user-feature-map.md`, `discovery.json`, `plan.
 
 ## Step 4: Hunt Indirect Connections via Agent Teams
 
-### 4a: Spawn Connection Hunters in Batches
+### 4a: Determine Connection Hunting File Assignments
 
-For each connection hunting split in the plan:
+After indexing is complete, identify which files need connection hunting:
 
-1. **Check for existing output.** Skip if already done.
-2. **Create tasks** for pending splits.
-3. **Spawn teammates in batches of up to 5.** Each teammate gets a set of connection
-   types to hunt for across the full repo. Assign them the
-   `feature-inventory:connection-hunter` agent.
+1. **Query the index** for files with connection hints:
+   ```sql
+   SELECT DISTINCT file FROM connection_hints WHERE resolved = 0;
+   ```
+2. **Grep the codebase** for known connection patterns not covered by tree-sitter
+   hints (emit, subscribe, publish, ipcRenderer, postMessage, on(', once(', etc.).
+   Record which files contain matches.
+3. **Combine and deduplicate** into a file list. Only files with at least one
+   connection pattern get an agent.
+4. **Write the file list** to `intermediate/connection-hunting-files.json`:
+   ```json
+   [
+     {"file": "src/services/order.ts", "hints_count": 3, "pattern_matches": 5,
+      "output": "intermediate/connections--src-services-order-ts.jsonl"},
+     {"file": "src/handlers/ipc-handlers.ts", "hints_count": 12, "pattern_matches": 8,
+      "output": "intermediate/connections--src-handlers-ipc-handlers-ts.jsonl"}
+   ]
+   ```
+
+Present summary:
+```
+Connection Hunting — File Assignments
+=======================================
+Files with connection patterns: {N} out of {total} indexed files
+  Connection hints from tree-sitter: {N} files
+  Grep pattern matches: {N} additional files
+  Skipped (no connection patterns): {N} files
+
+Estimated batches: {ceil(N/5)} (5 agents per batch)
+```
+
+### 4b: Spawn Per-File Connection Hunters in Batches
+
+For each file in the connection hunting list:
+
+1. **Check for existing output.** Skip if the file's JSONL output exists and has a
+   summary line (indicating the agent completed).
+2. **Create tasks** for pending files.
+3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE file. Assign
+   them the `feature-inventory:connection-hunter` agent.
 4. **Each teammate receives:**
-   - The repo path and full scope
+   - The specific file path to hunt connections for
+   - The repo path
    - The SQLite database path (`./docs/features/graph.db`)
-   - The connection types to hunt for (from the plan split)
-   - The `connection_hints` array relevant to their connection types
+   - The `connection_hints` for this file only
    - Output path for their findings
-   - This instruction verbatim: **"Be relentless. Hunt for every instance of your
-     assigned connection types across the entire codebase. Match every emitter to its
-     listeners, every publisher to its subscribers, every IPC sender to its handler.
-     When you can't make a connection, write it as unresolved with a specific question
-     for the user. Do NOT guess. A missed connection means a broken feature in the
-     rebuild."**
-5. **Batch-level hard stop (every 2 batches).**
+   - This instruction verbatim: **"Hunt every indirect connection in or out of your
+     assigned file. For each connection pattern you find (event emit, IPC send,
+     pub/sub publish, etc.), Grep the codebase for its counterpart. Document each
+     connection as you find it. When you can't find a match, write it as unresolved
+     with a specific question for the user. When you're done with your file, write
+     a summary line and terminate."**
+5. **Monitor agent liveness** using the heartbeat protocol (see
+   `references/context-management.md`). Do NOT assume an agent is dead unless its
+   output file has not been modified for 5+ minutes.
+6. **Batch-level hard stop (every 2 batches).**
 
-### 4b: Merge Connections into SQLite
+### 4c: Merge Connections into SQLite
 
 After all hunters complete:
-1. Parse each connection JSONL split file.
-2. INSERT into the `connections` and `unresolved_connections` tables in `graph.db`.
+1. Parse each per-file JSONL output, skipping heartbeat and summary lines.
+2. **Deduplicate connections** — the same connection (e.g., event emit→listen) will
+   be discovered by both the emitter file's agent and the listener file's agent.
+   Deduplicate by (connection_type, key_name, source_file, source_line, target_file,
+   target_line).
+3. INSERT into the `connections` and `unresolved_connections` tables in `graph.db`.
 
-### 4c: User Interview for Unresolved Connections
+### 4d: User Interview for Unresolved Connections
 
 If there are unresolved connections, present them to the user in batches of 5-10:
 
@@ -304,7 +336,7 @@ The connection hunter found {N} indirect connections and couldn't resolve {M}:
 Save resolutions to `./docs/features/clarifications.md`. Re-run connection hunting
 for any "Explain" or "Missing link" responses that reveal new patterns to search for.
 
-### 4d: Enrich Call Graph in SQLite
+### 4e: Enrich Call Graph in SQLite
 
 INSERT indirect edges into the `calls` table with the appropriate `connection_type`:
 ```sql
@@ -582,11 +614,12 @@ Resume rules:
 - Step 3 (indexing): Use `.progress.json` to skip completed splits. Resume from
   exact batch. Fall back to scanning index split files.
 - Step 3c-d (merge + validate): Re-run if any indexing splits were re-run.
-- Step 4 (connections): Use `.progress.json` to skip completed splits. Resume from
-  exact batch. Fall back to scanning connection split files.
-- Step 4c (user interview): Skip if `clarifications.md` has connection resolutions.
+- Step 4a (file assignments): Re-run if indexing changed. Fast — just queries the index.
+- Step 4b (per-file hunting): Use `.progress.json` to skip completed files. Resume from
+  exact batch. Fall back to scanning per-file JSONL outputs for summary lines.
+- Step 4d (user interview): Skip if `clarifications.md` has connection resolutions.
   Re-run for new unresolved items only.
-- Step 4d (enrich call graph): Re-run if connections changed.
+- Step 4e (enrich call graph): Re-run if connections changed.
 - Step 5 (graph): Re-run if enriched index changed. Graph building is relatively
   cheap compared to indexing and connection hunting.
 - Step 5b (validation interview): Re-run for new validation failures only.
@@ -616,9 +649,10 @@ Resume rules:
   },
 
   "connection_hunting": {
-    "completed_splits": ["connections--events-ipc-reactive"],
-    "pending_splits": ["connections--framework", "connections--external"],
-    "failed_splits": [],
+    "total_files": 45,
+    "completed_files": ["src/services/order.ts", "src/handlers/ipc-handlers.ts"],
+    "pending_files": ["src/events/emitter.ts", "src/middleware/auth.ts"],
+    "failed_files": [],
     "user_interview_done": false,
     "merged_to_sqlite": false,
     "call_graph_enriched": false

@@ -90,6 +90,56 @@ Both pipelines produce the same output format: a hierarchical feature index wher
 
 **Nothing is too small.** A tooltip, a default sort order, a 3-line validation rule, a retry delay, a password complexity requirement, an error message string - if the product exhibits the behavior, it gets documented.
 
+## Graph Pipeline Phases
+
+```
+Phase 1: Discovery + Index
+├── Repo discovery (languages, frameworks, modules, size)
+├── Mechanical indexing (tree-sitter AST parsing → symbols, calls, imports)
+│   └── Fast, deterministic, no LLM calls — produces SQLite index
+└── Connection hunting (per-file agents, all 11 connection types)
+    ├── Each agent gets ONE file, hunts connections in/out of it
+    ├── Agents write connections as they find them, then terminate
+    ├── Merge deduplicates (same connection found from both ends)
+    └── Dynamic user interview when connections can't be resolved
+
+Phase 2: Graph Construction
+├── Identify entry points (routes, cron, CLI, UI handlers, consumers, webhooks)
+├── Identify final outcomes (DB writes, responses, emails, external calls, UI state)
+├── Trace paths: entry point → [logic] → final outcome(s)
+├── Expand fan-outs (events, observables, IPC, triggers)
+└── Validation
+    ├── Orphan entry points → ALWAYS user interview
+    ├── Unreachable outcomes → ALWAYS user interview
+    └── Symbols with callers but no path → ALWAYS user interview
+
+Phase 3: Pathway Annotation
+├── For each pathway in the graph:
+│   ├── Data: what is read/written/validated/transformed
+│   ├── Auth: what authentication and authorization is required
+│   ├── Logic: what rules, calculations, state transitions apply
+│   ├── UI: what interface elements are involved
+│   ├── Config: what env vars, flags, constants affect the path
+│   └── Side Effects: what events/jobs/integrations are triggered
+└── Every annotation includes source maps → index entries
+
+Phase 4: Feature Derivation
+├── Cluster related pathways into features (using user's mental model)
+├── Name each feature by what users ACHIEVE, not how code is structured
+├── Describe the outcome, not the mechanism
+├── Link to related features → build hierarchy
+└── User resolution interview for thin/overlapping/ambiguous specs
+
+Phase 5: Index Maintenance
+├── /feature-inventory:reindex — manual incremental update after code changes
+│   ├── Diff changed files via git
+│   ├── Re-index affected symbols, re-hunt connections
+│   ├── Re-trace affected pathways, re-annotate
+│   ├── Flag features whose behaviors changed
+│   └── Generate user-facing change notes (feature terms, not code terms)
+└── (FUTURE) CI/deploy hook for automated reindex on push
+```
+
 ## Commands
 
 | Command | Description |
@@ -116,7 +166,7 @@ The graph pipeline indexes the codebase mechanically and discovers features from
 | **Pathway Annotations** | 6 dimensions per pathway: data model, auth, business logic, UI, configuration, side effects — each with source maps back to the index |
 | **Feature Hierarchy** | Features named by outcome (what users achieve), not implementation (how code is structured) |
 
-Supports: JavaScript/TypeScript, C#/.NET, Python, Ruby, Java/Kotlin, Go, PHP, Rust, Swift, Objective-C, C/C++.
+Supports: JavaScript/TypeScript, C#/.NET, Python, Ruby, Java/Kotlin, Go, PHP, Rust, Swift, Objective-C, C/C++, SQL/MySQL.
 
 ### Dimension Pipeline (create)
 
@@ -411,8 +461,8 @@ Plan output is designed to work with multiple implementation tools:
 
 | Agent | Purpose |
 |-------|---------|
-| `code-indexer` | Mechanically indexes every symbol: functions, classes, methods, routes, constants, types, variables, imports. Records definitions, call sites, signatures, exports. Flags dynamic dispatch for connection hunter |
-| `connection-hunter` | Hunts 11 types of indirect connections: events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing, dispatch tables, webhooks, file watchers. Interviews user for unresolvable connections |
+| `code-indexer` | Uses tree-sitter to mechanically index every symbol: functions, classes, methods, routes, constants, types, variables, imports. Deterministic AST parsing — no LLM calls for basic extraction. LLM reviews only connection hints (dynamic dispatch, framework magic, reflection). Falls back to Grep+Read if tree-sitter unavailable |
+| `connection-hunter` | Gets ONE file, hunts ALL 11 types of indirect connections in/out of it: events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing, dispatch tables, webhooks, file watchers. Documents each connection immediately, then terminates. Connections discovered from both ends and deduplicated at merge |
 | `graph-builder` | Constructs outcome graph: identifies entry points and final outcomes, traces pathways through the enriched call graph, detects fan-out points, classifies infrastructure, validates coverage |
 | `pathway-dimension-annotator` | Annotates each pathway with 6 dimensions (data, auth, logic, UI, config, side effects). Every annotation includes source maps back to the code reference index |
 | `feature-deriver` | Clusters annotated pathways into features named by outcome. Builds hierarchy (major → sub-feature → behavior) with links, source maps, and test cases |

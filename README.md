@@ -213,14 +213,16 @@ The plugin will:
 The graph pipeline discovers features bottom-up from what the code does:
 1. **Interview you** about the product (reuses existing `interview.md` if present)
 2. **Discover** the repo structure and tech stack
-3. **Index** every symbol in the codebase (functions, classes, methods, routes, constants, types, variables, imports) into SQLite
-4. **Hunt** for every indirect connection (events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing)
-5. **Interview you** to resolve connections that couldn't be traced automatically
-6. **Build** the outcome graph (entry points → pathways → final outcomes)
-7. **Interview you** about orphan routes and unreachable outcomes (never silently classified as dead code)
-8. **Annotate** each pathway with 6 dimensions (data, auth, logic, UI, config, side effects)
-9. **Derive** features from annotated pathways — named by what users achieve, not how code is structured
-10. **Validate** every pathway claimed by exactly one feature, every entry point in at least one feature
+3. **Build enriched index** (Phase 1 — delegated to `build-index`):
+   - Tree-sitter indexes every symbol into SQLite
+   - Per-file agents hunt indirect connections (events, IPC, pub/sub, DB triggers, etc.)
+   - Interview you to resolve connections that couldn't be traced automatically
+   - Enrich call graph with indirect edges
+4. **Build** the outcome graph (entry points → pathways → final outcomes)
+5. **Interview you** about orphan routes and unreachable outcomes (never silently classified as dead code)
+6. **Annotate** each pathway with 6 dimensions (data, auth, logic, UI, config, side effects)
+7. **Derive** features from annotated pathways — named by what users achieve, not how code is structured
+8. **Validate** every pathway claimed by exactly one feature, every entry point in at least one feature
 
 All structured data (index, connections, graph, annotations) lives in a single SQLite database (`docs/features/graph.db`). Feature detail files are the same markdown format as the dimension pipeline.
 

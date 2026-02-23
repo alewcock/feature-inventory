@@ -157,207 +157,30 @@ Write to `./docs/features/plan.json`.
 
 **MANDATORY — CLEAR STRONGLY RECOMMENDED.** Step 3 (indexing) is context-intensive.
 
-## Step 3: Build Code Reference Index via Agent Teams
+## Step 3: Build Enriched Index (Phase 1)
 
-### 3a: Create the Team
+**Delegate to `commands/build-index.md`.**
 
-Use `TeamCreate` to create a team named "feature-inventory-graph". Enable delegate mode.
+This step produces the enriched code reference index: every symbol indexed via
+tree-sitter, every indirect connection hunted per-file, user interview for unresolved
+connections, and the call graph enriched with indirect edges.
 
-### 3b: Spawn Indexing Teammates in Batches
+Read and follow `commands/build-index.md`. When it completes, `graph.db` contains the
+full enriched call graph — direct calls AND indirect connections — ready for graph
+construction.
 
-For each indexing split in the plan:
+**Do NOT proceed to Step 4 until `build-index.md` reports the enriched index is complete.**
 
-1. **Check for existing output:** If the split's output file exists and is non-empty, skip.
-2. **Create tasks** via `TaskCreate` for each pending split.
-3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE scope for ONE repo.
-   Assign them the `feature-inventory:code-indexer` agent.
-4. **Each teammate receives** via its task description:
-   - The repo path, scope, and output path from the plan
-   - The languages and frameworks detected
-   - A pointer to read `references/context-management.md` before starting
-   - This instruction verbatim: **"Index every named symbol in your scope: functions,
-     classes, methods, routes, constants, types, variables, imports. Record definitions,
-     call sites, signatures, and exports. Write to disk after every file. Flag dynamic
-     dispatch, framework magic, and reflection for the connection hunter. Do NOT interpret
-     meaning — only record structure."**
-5. **Wait for each batch** before spawning the next.
-6. **Update `.progress.json`** after each batch.
-7. **Batch-level hard stop (every 2 batches).** See `references/context-management.md`.
+### Context Checkpoint: After Phase 1
 
-### 3c: Create SQLite Database and Merge Indexes
-
-After all indexing teammates complete:
-
-1. **Create the SQLite database** at `./docs/features/graph.db` with the schema from
-   `code-indexer.md` (tables: `metadata`, `symbols`, `calls`, `imports`,
-   `file_manifest`, `connection_hints`).
-2. **Parse each JSONL split file** and INSERT rows into the appropriate tables.
-   Use `BEGIN TRANSACTION` / `COMMIT` per split file for performance.
-3. **Run the cross-reference pass** in SQL:
-   - Resolve `called_by` edges: for each row in `calls`, find the callee's `symbols.id`
-     and update `callee_id`. Update `caller_count` on each symbol.
-   - Resolve imports: match `imports.source` to `symbols.file` for within-project imports.
-   - Reconcile duplicate references across splits (same symbol indexed from different scopes).
-4. **Verify counts:** `SELECT COUNT(*) FROM symbols`, `SELECT COUNT(*) FROM calls`, etc.
-
-**This merge can be done by the orchestrator** using Python's built-in `sqlite3` module
-via the Bash tool:
-```bash
-python3 -c "
-import sqlite3, json, glob
-db = sqlite3.connect('./docs/features/graph.db')
-# ... create tables, parse JSONL, insert rows, cross-reference ...
-db.commit()
-"
-```
-
-For very large codebases (>50,000 symbols), spawn a dedicated merge teammate.
-
-### 3d: Index Validation
-
-Quick sanity checks on the merged index:
-- Every import resolves to an actual file
-- Symbol counts are proportional to file sizes (a 500-line file should have >5 symbols)
-- No files in scope were missed (compare against discovery.json file counts)
-
-Present index summary:
-```
-Code Reference Index — Complete
-================================
-Files indexed: {N} ({total lines})
-Symbols found: {N}
-  Functions: {N}  Classes: {N}  Methods: {N}  Routes: {N}
-  Constants: {N}  Types: {N}  Variables: {N}
-Imports: {N}
-Connection hints (for hunter): {N}
-  Dynamic calls: {N}  Framework magic: {N}  Reflection: {N}
-```
-
-### Context Checkpoint: After Indexing
-
-**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Step 4 spawns connection hunters.
-
-Preserved files: `interview.md`, `user-feature-map.md`, `discovery.json`, `plan.json`,
-`graph.db`, `intermediate/index--*.jsonl`
-
-## Step 4: Hunt Indirect Connections via Agent Teams
-
-### 4a: Determine Connection Hunting File Assignments
-
-After indexing is complete, identify which files need connection hunting:
-
-1. **Query the index** for files with connection hints:
-   ```sql
-   SELECT DISTINCT file FROM connection_hints WHERE resolved = 0;
-   ```
-2. **Grep the codebase** for known connection patterns not covered by tree-sitter
-   hints (emit, subscribe, publish, ipcRenderer, postMessage, on(', once(', etc.).
-   Record which files contain matches.
-3. **Combine and deduplicate** into a file list. Only files with at least one
-   connection pattern get an agent.
-4. **Write the file list** to `intermediate/connection-hunting-files.json`:
-   ```json
-   [
-     {"file": "src/services/order.ts", "hints_count": 3, "pattern_matches": 5,
-      "output": "intermediate/connections--src-services-order-ts.jsonl"},
-     {"file": "src/handlers/ipc-handlers.ts", "hints_count": 12, "pattern_matches": 8,
-      "output": "intermediate/connections--src-handlers-ipc-handlers-ts.jsonl"}
-   ]
-   ```
-
-Present summary:
-```
-Connection Hunting — File Assignments
-=======================================
-Files with connection patterns: {N} out of {total} indexed files
-  Connection hints from tree-sitter: {N} files
-  Grep pattern matches: {N} additional files
-  Skipped (no connection patterns): {N} files
-
-Estimated batches: {ceil(N/5)} (5 agents per batch)
-```
-
-### 4b: Spawn Per-File Connection Hunters in Batches
-
-For each file in the connection hunting list:
-
-1. **Check for existing output.** Skip if the file's JSONL output exists and has a
-   summary line (indicating the agent completed).
-2. **Create tasks** for pending files.
-3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE file. Assign
-   them the `feature-inventory:connection-hunter` agent.
-4. **Each teammate receives:**
-   - The specific file path to hunt connections for
-   - The repo path
-   - The SQLite database path (`./docs/features/graph.db`)
-   - The `connection_hints` for this file only
-   - Output path for their findings
-   - This instruction verbatim: **"Hunt every indirect connection in or out of your
-     assigned file. For each connection pattern you find (event emit, IPC send,
-     pub/sub publish, etc.), Grep the codebase for its counterpart. Document each
-     connection as you find it. When you can't find a match, write it as unresolved
-     with a specific question for the user. When you're done with your file, write
-     a summary line and terminate."**
-5. **Monitor agent liveness** using the heartbeat protocol (see
-   `references/context-management.md`). Do NOT assume an agent is dead unless its
-   output file has not been modified for 5+ minutes.
-6. **Batch-level hard stop (every 2 batches).**
-
-### 4c: Merge Connections into SQLite
-
-After all hunters complete:
-1. Parse each per-file JSONL output, skipping heartbeat and summary lines.
-2. **Deduplicate connections** — the same connection (e.g., event emit→listen) will
-   be discovered by both the emitter file's agent and the listener file's agent.
-   Deduplicate by (connection_type, key_name, source_file, source_line, target_file,
-   target_line).
-3. INSERT into the `connections` and `unresolved_connections` tables in `graph.db`.
-
-### 4d: User Interview for Unresolved Connections
-
-If there are unresolved connections, present them to the user in batches of 5-10:
-
-```
-Connection Resolution Interview
-=================================
-The connection hunter found {N} indirect connections and couldn't resolve {M}:
-
-1. Event 'sync.complete' is emitted from src/services/sync.ts:89 but no listener
-   was found in this codebase.
-   → Is there an external consumer? [External service / Dead code / Explain]
-
-2. Route GET /admin/debug/cache has no observable side effects.
-   → Is this a developer tool? [Dev tool / Dead code / Missing link / Explain]
-
-3. Plugin loader uses dynamic dispatch: plugins[name].execute(context)
-   → What plugins exist? [List them / Config file location / Not used]
-```
-
-Save resolutions to `./docs/features/clarifications.md`. Re-run connection hunting
-for any "Explain" or "Missing link" responses that reveal new patterns to search for.
-
-### 4e: Enrich Call Graph in SQLite
-
-INSERT indirect edges into the `calls` table with the appropriate `connection_type`:
-```sql
-INSERT INTO calls (caller_id, callee_id, callee_name, call_file, call_line, connection_type)
-VALUES ('SYM-emitter', 'SYM-listener', 'handlerName', 'file.ts', 42, 'event');
-```
-
-Update `caller_count` on affected symbols. This produces the **enriched call graph**
-that the graph builder consumes — direct calls AND indirect connections in the same table,
-queryable with a single SQL query.
-
-### Context Checkpoint: After Connection Hunting
-
-**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Step 5 (graph building) needs headroom.
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Step 4 (graph building) needs headroom.
 
 Preserved files: everything from previous steps, enriched `graph.db`,
-`intermediate/connections--*.jsonl`
+`intermediate/index--*.jsonl`, `intermediate/connections--*.jsonl`
 
-## Step 5: Build Outcome Graph
+## Step 4: Build Outcome Graph
 
-### 5a: Spawn Graph Builder
+### 4a: Spawn Graph Builder
 
 The graph builder is a single-agent task (it needs a holistic view of the codebase,
 not a per-module view). Spawn ONE teammate with the
@@ -379,7 +202,7 @@ The graph builder adds its tables (`entry_points`, `final_outcomes`, `pathways`,
    by UI page, by job scheduler, etc.), batched in groups of 5. Each writes to
    `pathways` and `pathway_steps` tables.
 
-### 5b: Graph Validation & User Interview
+### 4b: Graph Validation & User Interview
 
 Query the `graph_validation` table for issues:
 
@@ -413,9 +236,9 @@ re-trace affected pathways).
 
 Preserved files: everything from previous steps + graph tables in `graph.db`
 
-## Step 6: Annotate Pathways via Agent Teams
+## Step 5: Annotate Pathways via Agent Teams
 
-### 6a: Spawn Pathway Annotators in Batches
+### 5a: Spawn Pathway Annotators in Batches
 
 Group pathways by entry point for annotation (pathways from the same entry point share
 early steps). Each teammate gets a set of pathways sharing an entry point group.
@@ -436,7 +259,7 @@ early steps). Each teammate gets a set of pathways sharing an entry point group.
      verbatim, constant values exact, validation rules precise."**
 4. **Batch-level hard stop (every 2 batches).**
 
-### 6b: Merge Annotated Pathways
+### 5b: Merge Annotated Pathways
 
 After all annotators complete:
 1. Parse each annotation JSONL split file.
@@ -459,9 +282,9 @@ Ambiguities flagged: {N}
 
 Preserved files: everything from previous steps + annotations merged in `graph.db`
 
-## Step 7: Derive Features via Agent Teams
+## Step 6: Derive Features via Agent Teams
 
-### 7a: Initial Clustering (Orchestrator — lightweight)
+### 6a: Initial Clustering (Orchestrator — lightweight)
 
 Before spawning feature derivation teammates, the orchestrator does a quick clustering
 pass to assign pathways to major feature areas:
@@ -489,7 +312,7 @@ pass to assign pathways to major feature areas:
 }
 ```
 
-### 7b: Spawn Feature Derivation Teammates in Batches
+### 6b: Spawn Feature Derivation Teammates in Batches
 
 For each cluster:
 
@@ -510,7 +333,7 @@ For each cluster:
      them how it was built before."**
 4. **Batch-level hard stop (every 2 batches).**
 
-### 7c: User Resolution Interview
+### 6c: User Resolution Interview
 
 After all feature derivation teammates complete, scan detail files for quality issues
 using the same criteria as the standard pipeline's Step 4.5:
@@ -528,7 +351,7 @@ Save resolutions to `./docs/features/clarifications-features.md`.
 
 **MANDATORY — CLEAR STRONGLY RECOMMENDED.**
 
-## Step 8: Build Index
+## Step 7: Build Index
 
 **Identical to the standard pipeline's Step 4c.** Enumerate all detail files, build
 the hierarchy, write FEATURE-INDEX.md and FEATURE-INDEX.json.
@@ -536,7 +359,7 @@ the hierarchy, write FEATURE-INDEX.md and FEATURE-INDEX.json.
 The JSON index includes additional graph metadata: pathway references, entry point IDs,
 final outcome IDs, and source map symbol IDs. See `references/graph-output-format.md`.
 
-## Step 9: Validation & Summary
+## Step 8: Validation & Summary
 
 1. **Graph coverage check:** Every pathway must appear in exactly one feature.
    Report any unclaimed or duplicate-claimed pathways.
@@ -598,7 +421,7 @@ rm -f ./docs/features/FEATURE-INDEX.json
 ```
 
 **Do NOT clear:**
-- `.progress.json` — resume state (cleared only after Step 9 completes)
+- `.progress.json` — resume state (cleared only after Step 8 completes)
 - `graph.db` — the SQLite database (index, connections, graph, annotations). This is
   the most expensive artifact. Incremental steps update it in place.
 - `intermediate/` — JSONL teammate output (can be deleted after merge into SQLite,
@@ -611,33 +434,27 @@ Resume rules:
 - Step 0: Skip if `interview.md` exists.
 - Step 1: Skip if `discovery.json` exists.
 - Step 2: Re-run unless `plan.json` exists and discovery hasn't changed.
-- Step 3 (indexing): Use `.progress.json` to skip completed splits. Resume from
-  exact batch. Fall back to scanning index split files.
-- Step 3c-d (merge + validate): Re-run if any indexing splits were re-run.
-- Step 4a (file assignments): Re-run if indexing changed. Fast — just queries the index.
-- Step 4b (per-file hunting): Use `.progress.json` to skip completed files. Resume from
-  exact batch. Fall back to scanning per-file JSONL outputs for summary lines.
-- Step 4d (user interview): Skip if `clarifications.md` has connection resolutions.
-  Re-run for new unresolved items only.
-- Step 4e (enrich call graph): Re-run if connections changed.
-- Step 5 (graph): Re-run if enriched index changed. Graph building is relatively
+- Step 3 (Phase 1 — enriched index): Delegates to `build-index.md` which tracks its
+  own progress in the `indexing` and `connection_hunting` sections of `.progress.json`.
+  See `build-index.md` for detailed resume rules.
+- Step 4 (graph): Re-run if enriched index changed. Graph building is relatively
   cheap compared to indexing and connection hunting.
-- Step 5b (validation interview): Re-run for new validation failures only.
-- Step 6 (annotation): Use `.progress.json` to skip completed pathway groups.
+- Step 4b (validation interview): Re-run for new validation failures only.
+- Step 5 (annotation): Use `.progress.json` to skip completed pathway groups.
   Resume from exact batch. Re-run for pathways that changed in graph re-building.
-- Step 7 (feature derivation): Use `.progress.json` to skip completed feature areas.
+- Step 6 (feature derivation): Use `.progress.json` to skip completed feature areas.
   Re-run for features whose pathways changed.
-- Step 7c (user resolution): Skip if `clarifications-features.md` exists. Re-run for
+- Step 6c (user resolution): Skip if `clarifications-features.md` exists. Re-run for
   affected features if derivation re-ran.
-- Step 8-9: Always re-run (indexes were cleared).
+- Step 7-8: Always re-run (indexes were cleared).
 
 ## Progress File Schema
 
 ```json
 {
   "command": "create-graph",
-  "current_step": "4",
-  "current_substep": "4a",
+  "current_step": "5",
+  "current_substep": "5a",
   "batch_number": 2,
   "batches_total": 4,
 
@@ -657,6 +474,8 @@ Resume rules:
     "merged_to_sqlite": false,
     "call_graph_enriched": false
   },
+
+  "enriched_index_complete": true,
 
   "graph_building": {
     "completed": false,
@@ -691,7 +510,7 @@ can be consumed by the graph pipeline to save time and improve quality:
 | Artifact | Graph Pipeline Step | Notes |
 |----------|-------------------|-------|
 | `interview.md` | Step 0 (Interview) | Same questions, same answers. Skip the interview entirely. |
-| `user-feature-map.md` | Step 0 (Interview) | The user's mental model is input to feature clustering (Step 7a). |
+| `user-feature-map.md` | Step 0 (Interview) | The user's mental model is input to feature clustering (Step 6a). |
 | `discovery.json` | Step 1 (Discovery) | Repo structure hasn't changed. Skip discovery. |
 | `clarifications.md` | Steps 4c, 5b | Previous user clarifications about dead code, external services, and ambiguous connections are still valid. |
 
@@ -699,9 +518,9 @@ can be consumed by the graph pipeline to save time and improve quality:
 
 | Artifact | How the Graph Pipeline Uses It |
 |----------|-------------------------------|
-| `raw/` dimension outputs | After the graph pipeline derives features (Step 7), compare the graph-derived features against the raw dimension analysis outputs from the previous run. Mismatches reveal either: (a) dimensions the graph missed (missing connections), or (b) dimension analysis that was wrong (top-down misattribution). This cross-reference is the strongest validation that the graph pipeline captured everything. |
-| Previous `details/` files | Don't import these — they're structured around the old pipeline's dimension-based hierarchy. But read them during Step 7c (user resolution) to verify that every previously-documented behavior appears somewhere in the new graph-derived features. Any behavior that appeared in the old pipeline but NOT in the graph pipeline is a red flag: either a missed connection or a false positive from the original analysis. |
-| Previous `FEATURE-INDEX.json` | During Step 9 validation, compare the old feature list against the new one. Every feature in the old index should map to at least one feature in the new index (possibly renamed or restructured). Document any features that were present in the old pipeline but absent in the new one — these require user confirmation. |
+| `raw/` dimension outputs | After the graph pipeline derives features (Step 6), compare the graph-derived features against the raw dimension analysis outputs from the previous run. Mismatches reveal either: (a) dimensions the graph missed (missing connections), or (b) dimension analysis that was wrong (top-down misattribution). This cross-reference is the strongest validation that the graph pipeline captured everything. |
+| Previous `details/` files | Don't import these — they're structured around the old pipeline's dimension-based hierarchy. But read them during Step 6c (user resolution) to verify that every previously-documented behavior appears somewhere in the new graph-derived features. Any behavior that appeared in the old pipeline but NOT in the graph pipeline is a red flag: either a missed connection or a false positive from the original analysis. |
+| Previous `FEATURE-INDEX.json` | During Step 8 validation, compare the old feature list against the new one. Every feature in the old index should map to at least one feature in the new index (possibly renamed or restructured). Document any features that were present in the old pipeline but absent in the new one — these require user confirmation. |
 
 ### Not Reusable
 

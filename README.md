@@ -1,10 +1,12 @@
 # feature-inventory
 
-**v7.0.0**
+**v8.0.0**
 
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Builds a code reference index, hunts for every indirect connection (events, IPC, pub/sub, reactive chains), constructs an outcome graph, and derives features from what the code ACHIEVES — not how it's structured. Features describe outcomes, freeing re-implementors to build optimally without replicating legacy architecture.
 
 Also transforms the inventory into fully decomposed, implementation-ready plans for your target architecture and marketing-ready product catalogs for go-to-market teams.
+
+New in v8: **hardened graph pipeline indexing contract** — Phase 1 is now explicitly two-step: (1) deterministic tree-sitter mechanical indexing and (2) per-file connection hunting. Tree-sitter is enforced as a fail-fast prerequisite (no manual/regex fallback for graph Phase 1), connection hunters are explicitly instructed to cover all 11 connection types for in/out matching on their assigned file, and the Phase 1→Phase 2 handoff is defined as a unified code-index edge layer in SQLite (`graph.db`).
 
 New in v7: **graph-based feature discovery** — a fundamentally new bottom-up pipeline (`/feature-inventory:create-graph`) that mechanically indexes every symbol in the codebase, relentlessly hunts for indirect connections (events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing), constructs an outcome graph tracing entry points through pathways to final outcomes, annotates each pathway with 6 dimensions (data, auth, logic, UI, config, side effects), and derives features from outcomes. Uses SQLite (`graph.db`) for the index/graph — queryable, incrementally updatable, scales to 50k+ symbols. Includes Rust, Swift, and Objective-C extraction patterns. Also adds `/feature-inventory:reindex` for incremental updates after code changes — identifies affected files, re-indexes symbols, re-traces pathways, flags features, and generates user-facing change notes in feature terms.
 
@@ -98,7 +100,7 @@ Phase 1: Discovery + Index
 ├── Mechanical indexing (tree-sitter AST parsing → symbols, calls, imports)
 │   └── Fast, deterministic, no LLM calls — produces SQLite index
 └── Connection hunting (per-file agents, all 11 connection types)
-    ├── Each agent gets ONE file, hunts connections in/out of it
+    ├── Each agent gets ONE file, hunts unresolved connections in/out of it
     ├── Agents write connections as they find them, then terminate
     ├── Merge deduplicates (same connection found from both ends)
     └── Dynamic user interview when connections can't be resolved
@@ -160,8 +162,8 @@ The graph pipeline indexes the codebase mechanically and discovers features from
 
 | Layer | What It Produces |
 |-------|-----------------|
-| **Code Reference Index** | Every symbol (function, class, method, route, constant, type, variable, import) with definitions, call sites, signatures, exports |
-| **Indirect Connections** | Events, IPC, pub/sub, observables, DB triggers, middleware chains, DI bindings, convention routing, dispatch tables, webhooks, file watchers |
+| **Code Reference Index (Mechanical)** | Tree-sitter extracted symbols/calls/imports/exports plus connection hints, written to `graph.db` |
+| **Indirect Connections (Hunting)** | Per-file agents resolve events, IPC, pub/sub, observables, DB triggers, middleware chains, DI bindings, convention routing, dispatch tables, webhooks, file watchers into the same `graph.db` code-index layer |
 | **Outcome Graph** | Entry points (HTTP routes, CLI commands, cron jobs, UI events, message consumers, etc.) → pathways → final outcomes (data mutations, HTTP responses, emails, external API calls, etc.) |
 | **Pathway Annotations** | 6 dimensions per pathway: data model, auth, business logic, UI, configuration, side effects — each with source maps back to the index |
 | **Feature Hierarchy** | Features named by outcome (what users achieve), not implementation (how code is structured) |
@@ -470,7 +472,7 @@ Plan output is designed to work with multiple implementation tools:
 
 | Agent | Purpose |
 |-------|---------|
-| `code-indexer` | Uses tree-sitter to mechanically index every symbol: functions, classes, methods, routes, constants, types, variables, imports. Deterministic AST parsing — no LLM calls for basic extraction. LLM reviews only connection hints (dynamic dispatch, framework magic, reflection). Falls back to Grep+Read if tree-sitter unavailable |
+| `code-indexer` | Uses tree-sitter to mechanically index every symbol: functions, classes, methods, routes, constants, types, variables, imports. Deterministic AST parsing — no LLM calls for basic extraction. LLM reviews only connection hints (dynamic dispatch, framework magic, reflection). Tree-sitter is required for Graph Pipeline Phase 1; indexing fails fast if unavailable |
 | `connection-hunter` | Gets ONE file, hunts ALL 11 types of indirect connections in/out of it: events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing, dispatch tables, webhooks, file watchers. Documents each connection immediately, then terminates. Connections discovered from both ends and deduplicated at merge |
 | `graph-builder` | Constructs outcome graph: identifies entry points and final outcomes, traces pathways through the enriched call graph, detects fan-out points, classifies infrastructure, validates coverage |
 | `pathway-dimension-annotator` | Annotates each pathway with 6 dimensions (data, auth, logic, UI, config, side effects). Every annotation includes source maps back to the code reference index |

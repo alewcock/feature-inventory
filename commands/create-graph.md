@@ -333,17 +333,17 @@ can be consumed by the graph pipeline to save time and improve quality:
 | Artifact | Graph Pipeline Step | Notes |
 |----------|-------------------|-------|
 | `interview.md` | Step 0 (Interview) | Same questions, same answers. Skip the interview entirely. |
-| `user-feature-map.md` | Step 0 (Interview) | The user's mental model is input to feature clustering (Step 6a). |
+| `user-feature-map.md` | Step 0 (Interview) | The user's mental model is input to feature clustering (`derive-features.md` Step 1). |
 | `discovery.json` | Step 1 (Discovery) | Repo structure hasn't changed. Skip discovery. |
-| `clarifications.md` | Steps 4c, 5b | Previous user clarifications about dead code, external services, and ambiguous connections are still valid. |
+| `clarifications.md` | Phase 1 + 2 | Previous user clarifications about dead code, external services, and ambiguous connections are still valid. Used by `build-index.md` and `build-graph.md`. |
 
 ### Cross-Reference Material (don't skip, but use as validation)
 
 | Artifact | How the Graph Pipeline Uses It |
 |----------|-------------------------------|
-| `raw/` dimension outputs | After the graph pipeline derives features (Step 6), compare the graph-derived features against the raw dimension analysis outputs from the previous run. Mismatches reveal either: (a) dimensions the graph missed (missing connections), or (b) dimension analysis that was wrong (top-down misattribution). This cross-reference is the strongest validation that the graph pipeline captured everything. |
-| Previous `details/` files | Don't import these — they're structured around the old pipeline's dimension-based hierarchy. But read them during Step 6c (user resolution) to verify that every previously-documented behavior appears somewhere in the new graph-derived features. Any behavior that appeared in the old pipeline but NOT in the graph pipeline is a red flag: either a missed connection or a false positive from the original analysis. |
-| Previous `FEATURE-INDEX.json` | During Step 8 validation, compare the old feature list against the new one. Every feature in the old index should map to at least one feature in the new index (possibly renamed or restructured). Document any features that were present in the old pipeline but absent in the new one — these require user confirmation. |
+| `raw/` dimension outputs | After Phase 4 derives features, compare the graph-derived features against the raw dimension analysis outputs from the previous run. Mismatches reveal either: (a) dimensions the graph missed (missing connections), or (b) dimension analysis that was wrong (top-down misattribution). This cross-reference is the strongest validation that the graph pipeline captured everything. |
+| Previous `details/` files | Don't import these — they're structured around the old pipeline's dimension-based hierarchy. But read them during `derive-features.md` Step 3 (user resolution) to verify that every previously-documented behavior appears somewhere in the new graph-derived features. Any behavior that appeared in the old pipeline but NOT in the graph pipeline is a red flag: either a missed connection or a false positive from the original analysis. |
+| Previous `FEATURE-INDEX.json` | During `derive-features.md` Step 5 (validation), compare the old feature list against the new one. Every feature in the old index should map to at least one feature in the new index (possibly renamed or restructured). Document any features that were present in the old pipeline but absent in the new one — these require user confirmation. |
 
 ### Not Reusable
 

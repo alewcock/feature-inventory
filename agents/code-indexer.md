@@ -46,13 +46,18 @@ You will receive:
 
 ## Context Window Discipline
 
-- **Process ONE file at a time.** Index all symbols in a file, write them, move on.
-- **Never hold more than ~200 lines of source in context at once.** Use line ranges.
-- **Write incrementally** after every file. The index is append-friendly (JSON Lines
+- **Tree-sitter does the heavy lifting.** Symbol extraction is mechanical — the agent
+  does not read source files for basic indexing. Tree-sitter parses the AST and a
+  Python script extracts symbols, calls, and imports programmatically.
+- **Only read source for connection hints.** After tree-sitter extraction, read targeted
+  line ranges ONLY for items flagged as connection hints (dynamic dispatch, framework
+  magic, reflection, ambiguous patterns that need LLM judgment).
+- **Never hold more than ~200 lines of source in context at once** when reviewing
+  flagged items.
+- **Write incrementally** after every file batch. The index is append-friendly (JSON Lines
   intermediate format, merged at the end).
-- **Use Grep to find patterns first**, then Read targeted lines to extract detail.
 - **Source file manifest is MANDATORY.** Enumerate all files in scope at the start,
-  track which ones you've indexed.
+  track which ones have been processed.
 
 ## Symbol Types to Index
 
@@ -169,7 +174,128 @@ Record every import to build the dependency graph between files:
 }
 ```
 
+## Tree-Sitter Extraction
+
+### Why Tree-Sitter
+
+Symbol extraction is **mechanical, not interpretive**. Tree-sitter provides:
+- **Deterministic parsing** — the same file always produces the same AST
+- **Speed** — thousands of files parsed in seconds, no LLM calls needed
+- **Completeness** — every syntactic construct is captured in the tree
+- **Correctness** — a real parser, not regex approximation
+
+The agent runs tree-sitter via a Python script. The LLM is only needed AFTER
+extraction to review connection hints that tree-sitter flags but cannot resolve.
+
+### Setup
+
+Check for and install tree-sitter Python bindings:
+
+```bash
+python3 -c "import tree_sitter_languages" 2>/dev/null || pip install tree-sitter-languages
+```
+
+The `tree-sitter-languages` package bundles grammars for all common languages.
+If it's unavailable, install individual grammar packages:
+
+```bash
+pip install tree-sitter tree-sitter-python tree-sitter-javascript tree-sitter-typescript
+```
+
+If tree-sitter cannot be installed (restricted environment), fall back to LLM-based
+extraction using the patterns in "Language-Specific Extraction Patterns" below.
+This fallback is slower, less reliable, and burns context — always prefer tree-sitter.
+
+### AST Node Types by Language
+
+The extraction script queries these tree-sitter node types. See
+"Language-Specific Extraction Patterns" below for full semantic detail
+on what each type captures.
+
+**TypeScript / JavaScript:** `function_declaration`, `arrow_function`,
+`method_definition`, `class_declaration`, `import_statement`,
+`interface_declaration`, `type_alias_declaration`, `enum_declaration`,
+`variable_declarator`, `call_expression`, `export_statement`
+
+**Python:** `function_definition`, `class_definition`, `import_statement`,
+`import_from_statement`, `decorated_definition`, `assignment` (module-level)
+
+**C# / .NET:** `method_declaration`, `class_declaration`, `struct_declaration`,
+`interface_declaration`, `enum_declaration`, `property_declaration`,
+`using_directive`, `attribute`, `field_declaration`
+
+**Go:** `function_declaration`, `method_declaration`, `type_declaration`,
+`import_declaration`, `const_declaration`, `var_declaration`
+
+**Rust:** `function_item`, `struct_item`, `enum_item`, `impl_item`,
+`trait_item`, `use_declaration`, `const_item`, `static_item`,
+`macro_definition`, `attribute_item`
+
+**Ruby:** `method`, `singleton_method`, `class`, `module`, `call`
+
+**Swift:** `function_declaration`, `class_declaration`, `struct_declaration`,
+`enum_declaration`, `protocol_declaration`, `import_declaration`,
+`property_declaration`
+
+**Objective-C:** `method_definition`, `class_interface`, `class_implementation`,
+`protocol_declaration`, `property_declaration`, `preproc_import`, `preproc_def`
+
+**C / C++:** `function_definition`, `function_declaration`, `class_specifier`,
+`struct_specifier`, `preproc_include`, `preproc_def`
+
+**SQL / MySQL:** `create_table_statement`, `create_function_statement`,
+`create_procedure_statement`, `create_trigger_statement`, `create_view_statement`,
+`create_index_statement`, `column_definition`, `foreign_key_constraint`
+
+### Extraction Approach
+
+The extraction script is a single Python file that:
+
+1. **Walks each source file's AST** and collects:
+   - Symbol definitions (name, type, file, line range, visibility)
+   - Signatures (parameters, return types from the AST)
+   - Call expressions within each symbol's body (callee name, line)
+   - Import statements (source, imported names)
+   - Decorators/attributes on symbols
+
+2. **Flags connection hints** that require LLM review:
+   - Dynamic property access: `obj[variable]()` → `dynamic_call`
+   - String literal dispatch: `handlers["key"]` → `string_key_dispatch`
+   - Decorator/attribute patterns that imply framework wiring → `framework_magic`
+   - Reflection patterns: `getattr()`, `eval()`, `Activator.CreateInstance()` → `reflection`
+
+3. **Writes JSONL output** — one JSON object per symbol, matching the schema
+   defined in "Symbol Types to Index" above.
+
+The agent **writes this script at runtime** based on the detected languages,
+then runs it via Bash. The script is disposable — it exists only to extract
+symbols and is not committed to the repository.
+
+### What Tree-Sitter Cannot Resolve
+
+Tree-sitter extracts syntax, not semantics. These items require the agent's
+LLM-based judgment after extraction:
+
+- **Framework magic** — DI containers, decorator effects, convention-based routing
+  (e.g., Next.js file-based routes are syntax, but NestJS `@Module()` providers
+  require understanding the framework's DI resolution)
+- **Dynamic dispatch** — `plugins[name].execute()` where `name` is a runtime value
+- **Reflection** — `getattr(obj, field_name)` where `field_name` is dynamic
+- **Macro-generated code** — Rust `derive` macros, C preprocessor macros that
+  define functions
+- **Template/convention patterns** — Rails resource routes, Django URL patterns
+  that map to view classes by convention
+
+These are flagged as `connection_hints` for the connection hunter.
+
 ## Language-Specific Extraction Patterns
+
+> **With tree-sitter:** These patterns are implemented as AST node type queries in
+> the extraction script. See "AST Node Types by Language" above for the tree-sitter
+> equivalents.
+>
+> **Without tree-sitter (fallback):** Use these patterns with Grep to find symbol
+> locations, then Read targeted line ranges to extract detail.
 
 ### JavaScript / TypeScript
 - **Functions:** `function name(`, `const name = (`, `const name = function(`,
@@ -293,6 +419,34 @@ Record every import to build the dependency graph between files:
   Flag ALL `performSelector:`, `respondsToSelector:`, `NSClassFromString`,
   `NSSelectorFromString` for the connection hunter.
 
+### SQL / MySQL
+- **Tables:** `CREATE TABLE name`, `ALTER TABLE name` — record every column
+  (name, type, nullability, default, constraints)
+- **Views:** `CREATE VIEW name AS` — record as a derived symbol referencing its
+  source tables
+- **Stored Procedures:** `CREATE PROCEDURE name(`, `DELIMITER //` blocks — record
+  parameters, body calls to other procedures, and DML operations (which tables are
+  read/written)
+- **Functions:** `CREATE FUNCTION name(` — record parameters, return type, determinism
+  (`DETERMINISTIC` / `NOT DETERMINISTIC`)
+- **Triggers:** `CREATE TRIGGER name BEFORE|AFTER INSERT|UPDATE|DELETE ON table` —
+  record timing, event, table, and body operations. **Always flag as `connection_hint`
+  type `db_hook`** — triggers are indirect connections invisible to application code
+- **Indexes:** `CREATE INDEX name ON table(columns)`, `CREATE UNIQUE INDEX` — record
+  index name, table, columns, uniqueness
+- **Foreign Keys:** `FOREIGN KEY (col) REFERENCES other_table(col)` — record as a
+  relationship between tables, with ON DELETE/ON UPDATE actions
+- **Events:** `CREATE EVENT name ON SCHEDULE` — record as scheduled job entry points
+  (flag for graph builder)
+- **Constants:** `SET @variable =`, session/global variable assignments
+- **Imports:** None (SQL has no import system). Cross-file references are implicit
+  via table/procedure names — the cross-reference pass must match these by name.
+- **NOTE:** SQL files may be migration files (versioned schema changes) or
+  persistent definitions (stored procedures, views). Record both. For migration
+  files, record the final state of each table after all migrations are applied
+  if determinable; otherwise record each migration as a separate symbol with a
+  `migration_order` field.
+
 ## Handling Untyped / Dynamic Languages
 
 For JavaScript, Python, Ruby, and other dynamic languages:
@@ -312,32 +466,54 @@ For JavaScript, Python, Ruby, and other dynamic languages:
 
 ## Execution Strategy
 
-1. **Build file manifest.** Glob for all source files in scope, excluding
-   vendor/node_modules/generated directories. Write the manifest.
-
-2. **Process files in dependency order when possible.** Start with files that have
-   no imports from within the project (leaf nodes), then work inward. This helps
-   resolve import references. If dependency order isn't easily determined, process
-   alphabetically — cross-referencing happens in a merge pass.
-
-3. **For each file:**
-   a. Count lines. If >500 lines, process in 200-line chunks.
-   b. First pass: Grep for definition patterns (function, class, const, etc.)
-      to get a symbol list with line numbers.
-   c. Second pass: For each symbol, Read its definition (targeted line range)
-      to capture signature, params, calls within its body.
-   d. Third pass: Grep for imports at the top of the file.
-   e. Write all symbols from this file to the intermediate output.
-
-4. **Write intermediate format** (JSONL — one JSON object per line, append-only):
+1. **Check tree-sitter availability.** Verify Python 3 and tree-sitter are installed:
+   ```bash
+   python3 -c "import tree_sitter_languages" 2>/dev/null && echo "ready"
    ```
-   {"type":"function","name":"calculate",...}
-   {"type":"class","name":"ShippingService",...}
+   If not available, install:
+   ```bash
+   pip install tree-sitter-languages
    ```
-   JSONL is the teammate output format. Each teammate writes to its own `.jsonl` file.
-   The orchestrator merges these into SQLite in Step 3c.
+   If installation fails, fall back to LLM-based extraction (see "Fallback" below).
 
-5. **After all files are processed: cross-reference pass.**
+2. **Build file manifest.** Glob for all source files in scope, excluding
+   vendor/node_modules/generated directories. Write the manifest. Map each file
+   to its tree-sitter language identifier.
+
+3. **Write and run the extraction script.** Create a Python script that:
+   a. Iterates over every file in the manifest.
+   b. Parses each file with tree-sitter using the appropriate language grammar.
+   c. Walks the AST to extract symbols: definitions, signatures, call sites,
+      imports, exports, decorators/attributes.
+   d. Flags connection hints: dynamic dispatch, reflection, framework magic,
+      string-keyed dispatch patterns.
+   e. Writes one JSONL line per symbol to the output file.
+   f. Writes a summary line at the end with file counts and symbol counts.
+
+   Run via Bash:
+   ```bash
+   python3 /tmp/extract_symbols.py \
+     --scope "src/main,src/renderer" \
+     --languages "typescript,javascript" \
+     --output intermediate/index--main.jsonl \
+     --manifest intermediate/manifest--main.json
+   ```
+
+   The script is disposable — written by the agent at runtime for the specific
+   languages and frameworks detected, then discarded after extraction.
+
+4. **Review connection hints (LLM pass).** After tree-sitter extraction, review
+   ONLY the flagged connection hints. For each hint:
+   a. Read the source code at the flagged location (targeted line range).
+   b. Determine if it's a connection hint for the connection hunter, a framework
+      convention, or a false positive.
+   c. Update the hint record with classification and notes.
+
+   This is the ONLY step where the agent reads source files. Basic symbol
+   extraction is fully handled by tree-sitter.
+
+5. **Cross-reference pass.** Either in the extraction script or as a post-processing
+   step:
    - For each `calls` entry, find the matching definition and record the reverse
      `called_by` edge.
    - For each `import`, resolve the source path to an actual file.
@@ -345,6 +521,19 @@ For JavaScript, Python, Ruby, and other dynamic languages:
 
 6. **Write the final output.** If `db_path` is provided, insert into the SQLite database
    (the orchestrator handles DB creation). Otherwise, write JSONL to `output_path`.
+
+### Fallback: LLM-Based Extraction
+
+If tree-sitter cannot be installed, fall back to manual extraction using the patterns
+in "Language-Specific Extraction Patterns":
+
+1. For each file: Grep for definition patterns to find symbol locations.
+2. Read targeted line ranges to extract signatures and call sites.
+3. Write JSONL output incrementally.
+
+This fallback is **significantly slower**, **less reliable** (regex can't parse
+nested structures), and **burns context window** reading every source file. Use it
+only when tree-sitter is genuinely unavailable.
 
 ## Storage Format
 

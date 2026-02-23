@@ -461,7 +461,7 @@ starts fresh from those files.
 Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
 `discovery.json`, `plan.json`, `raw/*` (all dimension outputs)
 
-## Step 3.5: Source Coverage Audit (Mandatory — Blocks Step 4)
+## Step 3.5: Structural Coverage Audit (Mandatory — Blocks Step 4)
 
 **This step is automated and mandatory.** Do NOT skip it. Do NOT proceed to Step 4
 until every gap identified here is resolved.
@@ -469,7 +469,17 @@ until every gap identified here is resolved.
 The raw analysis may have covered some source files thoroughly and others barely at all.
 This step catches the gaps before synthesis, when they're cheapest to fix.
 
-### 3.5a: Run the Coverage Audit Script
+Unlike a simple filename-mention check, this audit **extracts actual code elements**
+(functions, classes, routes, handlers, etc.) from every source file and verifies that
+each element appears in the analysis output. A 90-line file with 8 business rules gets
+8 things to check. A 2000-line file that's mostly boilerplate gets checked for only the
+handful of things that actually matter.
+
+The audit also **detects shared infrastructure** — elements defined in one file but called
+from multiple distinct files. These are candidates for the purpose audit in Step 4.5,
+which verifies that each calling context is represented as a distinct feature.
+
+### 3.5a: Run the Structural Coverage Audit
 
 Execute the scripted audit:
 
@@ -482,52 +492,69 @@ python3 {plugin_path}/scripts/coverage-audit.py \
 ```
 
 The script:
-1. Enumerates ALL source files >100 lines from each repo's filesystem (not from
-   plan.json file lists)
+1. Enumerates ALL source files from each repo's filesystem (not from plan.json file lists)
 2. Excludes paths matching `plan.json.exclude_patterns`
-3. For each file, counts references in `raw/` AND `details/` using filename-qualified
-   grep (matches `programs.js` or `/programs.`, not bare `programs`)
-4. Applies the proportionality threshold: `required = ceil(source_lines / 50)`
-5. Classifies gaps by severity: CRITICAL (>500 lines), IMPORTANT (200-500 lines),
-   MINOR (<200 lines), TEST (test files)
-6. Writes `coverage-audit.json` with full gap list and triage summary
-7. Exits non-zero if any gaps found
+3. **Extracts named code elements** from each file using language-aware regex:
+   functions, classes, methods, routes, handlers, structs, interfaces, etc.
+4. Builds an identifier index of all raw/ and details/ analysis output
+5. **Checks each extracted element** for presence in the analysis — not line counts,
+   not filename mentions, but whether each actual function/class/route was documented
+6. Classifies files by element coverage:
+   - ADEQUATE: >= 60% of elements found in analysis
+   - SHALLOW: some elements found but < 60%
+   - MISSING: zero elements found and filename not mentioned
+7. Classifies gaps by severity: CRITICAL (large files or many missing elements),
+   IMPORTANT (moderate gaps), MINOR (few missing elements), TEST (test files)
+8. **Detects shared elements**: functions/methods referenced from 2+ other files.
+   These are output in `coverage-audit.json` under `shared_elements` for the
+   purpose audit in Step 4.5.
+9. Writes `coverage-audit.json` with full gap list, triage summary, and shared elements
+10. Exits non-zero if any gaps found
 
 **The orchestrator does NOT interpret the audit — it reads the script's JSON output.**
 
 ### 3.5b: Triage Gaps
 
-Before spawning gap-fill agents, read `coverage-audit.json` and triage the gaps:
+Before spawning gap-fill agents, read `coverage-audit.json` and triage the gaps.
 
-1. **CRITICAL (>500 source lines, MISSING or SHALLOW):** These files contain significant
-   product behavior. Must be filled before Step 4.
+Each gap now includes `elements_missing` — the specific function/class/route names that
+the analysis failed to cover. This tells the gap-fill agent exactly what to look for.
 
-2. **IMPORTANT (200-500 source lines, MISSING or SHALLOW):** Likely contain non-trivial
-   logic. Should be filled before Step 4 if possible.
+1. **CRITICAL:** Files with many missing elements or large files with MISSING status.
+   These files contain significant product behavior that the dimension analyzers didn't
+   reach. Must be filled before Step 4.
 
-3. **MINOR (<200 source lines, SHALLOW only):** May be adequately covered by detail files
-   even if raw coverage is thin. The orchestrator should spot-check 3-5 of these — read
-   the first 20 lines of each source file and check if the behavior is already captured
-   in detail files. If so, mark as accepted. If not, queue for filling.
+2. **IMPORTANT:** Files with moderate gaps — some elements covered, others not. The
+   `elements_missing` list tells you exactly which functions/classes were missed.
+   Should be filled before Step 4 if possible.
 
-4. **TEST FILES:** Test files (matching `*Tests.cs`, `*Test.cs`, `*.test.js`, `*.spec.js`,
-   etc.) document expected behavior and are valuable for the spec, but are lower priority
-   than production source. Fill these only after all CRITICAL and IMPORTANT gaps are
-   resolved. If context/budget is exhausted, mark test file gaps as
-   "DEFERRED — test coverage" in the audit report.
+3. **MINOR:** Files with only 1-2 missing elements. The orchestrator should spot-check
+   these — read the missing elements in the source and verify they're truly meaningful
+   (not just helper functions or trivial wrappers). Accept if they're not feature-relevant.
 
-5. **VENDOR-ADJACENT:** Files that the product owns but are infrastructure (connection
-   string factories, proxy attributes, service contracts, `.Designer.cs` files). These are
-   typically boilerplate. The orchestrator should spot-check and mark as accepted if
-   they're genuinely just wiring.
+4. **TEST FILES:** Lower priority. Fill only after CRITICAL and IMPORTANT gaps are
+   resolved. If context/budget is exhausted, mark as "DEFERRED — test coverage."
+
+5. **VENDOR-ADJACENT:** Files that are infrastructure/boilerplate. Spot-check and accept
+   if they're genuinely just wiring.
 
 Present the triage to the user:
 ```
-Gap Triage:
-  CRITICAL:  {N} files ({total lines})
-  IMPORTANT: {N} files ({total lines})
-  MINOR:     {N} files ({total lines}) — {N} spot-checked and accepted
+Structural Coverage Audit
+==========================
+Source files scanned: {N} ({total lines})
+Code elements extracted: {N}
+Element coverage: {covered}/{total} elements ({pct}%)
+File-level: {adequate}/{total} files adequately analyzed
+
+Gaps found: {N}
+  CRITICAL:  {N} files — {missing_elements} missing elements
+  IMPORTANT: {N} files — {missing_elements} missing elements
+  MINOR:     {N} files — {N} spot-checked and accepted
   TEST:      {N} files — deferred
+
+Shared infrastructure elements: {N}
+  (Will be purpose-audited after synthesis in Step 4.5)
 
 Filling {N} gaps in {ceil(N/5)} batches...
 ```
@@ -537,16 +564,22 @@ Filling {N} gaps in {ceil(N/5)} batches...
 **This is a hard gate.** If there are CRITICAL or IMPORTANT gaps:
 
 1. **Do NOT proceed to Step 4.**
-2. **Group related files for the same agent.** When multiple gap files are in the same
-   directory or clearly related (e.g., `asyncio.cpp` + `asyncio.h`, or
-   `ScheduleRenderer.cs` + `ScheduleOptimizer.cs`), assign them to the same gap-fill
-   agent rather than one agent per file. This is more context-efficient.
-3. For each gap (or group), create a new agent task scoped to those specific files. Use
-   the same dimension analyzer but with a narrow scope:
+2. **Include the missing elements in the gap-fill agent's instructions.** Each gap now
+   has an `elements_missing` list — pass these to the agent so it knows exactly what
+   functions/classes/routes to analyze:
    ```
    scope: "src/js/remote/ControlCenter.js"
    output_path: "raw/{repo-name}/ui-screens--ControlCenter.md"
+   missing_elements: ["togglePanel", "handleButtonPress", "CustomButtonConfig"]
+   instruction: "Focus on these specific elements that were missed in the initial
+   analysis. Document each one exhaustively: what it does, its inputs/outputs,
+   business rules, edge cases, error handling, and how it connects to the rest
+   of the system."
    ```
+3. **Group related files for the same agent.** When multiple gap files are in the same
+   directory or clearly related (e.g., `asyncio.cpp` + `asyncio.h`, or
+   `ScheduleRenderer.cs` + `ScheduleOptimizer.cs`), assign them to the same gap-fill
+   agent rather than one agent per file.
 4. Spawn gap-filling teammates in batches of up to 5.
 5. **Batch-level hard stop applies here too.** Gap-fill batches count toward the
    2-batch cadence. If this is the 2nd batch since the last hard stop (including
@@ -561,10 +594,12 @@ Filling {N} gaps in {ceil(N/5)} batches...
 then present remaining gaps to the user:
 
 ```
-These {N} files still have shallow coverage after 3 fill cycles.
+These {N} files still have element coverage gaps after 3 fill cycles.
+Missing elements: {list top 10 missing element names}
+
 This likely means the files contain patterns the analyzer agents
 can't fully decompose (e.g., very large procedural files, generated
-code, visualization shaders). Accept remaining gaps? [Y/N]
+code, dynamic dispatch). Accept remaining gaps? [Y/N]
 ```
 
 Only proceed to Step 4 when the coverage report shows 0 gaps, or the orchestrator
@@ -576,24 +611,20 @@ exhausted and the user has accepted the remainder.
 Show the user:
 
 ```
-Source Coverage Audit
-=====================
-Total source files: {N} ({total lines})
-Files >100 lines: {N}
+Structural Coverage Audit — Complete
+=====================================
+Source files: {N} ({total lines})
+Code elements: {extracted} extracted, {covered} covered ({pct}%)
+Files: {adequate}/{total} adequately analyzed
 
-Coverage: {adequate}/{total} files adequately analyzed ({%})
+Gaps resolved: {filled} in {cycles} fill cycle(s)
+Gaps remaining: {N} (accepted)
 
-Gaps found: {N}
-  - MISSING (not analyzed at all): {N}
-  - SHALLOW (below proportionality threshold): {N}
-  - INCOMPLETE (agent ran out of context): {N}
+Shared infrastructure: {N} elements detected
+  These will be purpose-audited after synthesis (Step 4.5)
+  to verify each calling context is a distinct feature.
 
-{If gaps > 0:}
-Re-queuing {N} files for targeted re-analysis...
-{list files and their dimensions}
-
-{If gaps == 0:}
-All source files adequately covered. Proceeding to synthesis.
+Proceeding to synthesis.
 ```
 
 ### Context Checkpoint: After Coverage Audit
@@ -674,6 +705,27 @@ raw files — they can jump to the relevant sections.
    Cross-reference raw file sections against the user's feature map. Anything unclaimed
    gets a new feature area or gets assigned to an existing one.
 
+6. **Incorporate shared infrastructure elements.** Read `coverage-audit.json` and check
+   the `shared_elements` list. For elements with high caller counts (3+), note which
+   feature areas their callers belong to. Include these as `shared_infrastructure` hints
+   in the synthesis plan so synthesizer teammates know to trace each shared element to
+   its distinct calling contexts rather than collapsing it into a single generic behavior:
+
+   ```json
+   "shared_infrastructure": [
+     {
+       "element": "StartPlaylist",
+       "defined_in": "src/services/PlaylistService.js",
+       "callers_by_feature": {
+         "F-002": ["src/automation/ScheduleRunner.js"],
+         "F-003": ["src/ui/MusicBrowse.js", "src/ui/SearchResults.js"],
+         "F-005": ["src/ui/ControlCenter.js"]
+       },
+       "note": "Each feature area should have its own behavior for invoking this element, reflecting its specific trigger, context, error handling, and UX."
+     }
+   ]
+   ```
+
 **Context budget for 4a:** This step should use minimal context. You're reading headers,
 not content. The synthesis-plan.json is the handoff to teammates.
 
@@ -748,17 +800,85 @@ Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
 `discovery.json`, `plan.json`, `raw/*`, `coverage-audit.json`,
 `synthesis-plan.json`, `details/*`
 
-### 4.5: User Resolution Interview (Mandatory — Blocks 4c)
+### 4.5: Purpose Audit & User Resolution (Mandatory — Blocks 4c)
 
-After synthesis, some features will be thin, ambiguous, or redundant. These are **worse
-than gaps** for downstream agents — an agent that encounters a vague spec will either skip
-it (creating a gap) or hallucinate around it (creating wrong behavior). This step resolves
-every ambiguous item through targeted user questions.
+After synthesis, three categories of problems need resolution before the index is built:
+1. **Collapsed purposes** — shared infrastructure traced to a single generic behavior
+   instead of distinct features per calling context (detected by purpose audit)
+2. **Quality issues** — thin specs, ambiguities, overlaps, orphans (detected by scanning)
+3. **User knowledge gaps** — things only the user can clarify
 
-#### 4.5a: Identify Candidates for Resolution
+#### 4.5a: Run Purpose Audit (Layer 2 — Shared Infrastructure Tracing)
 
-Scan all detail files produced in 4b to find items that need user input. A feature is a
-**resolution candidate** if any of these apply:
+The structural coverage audit (Step 3.5) identified **shared elements** — functions,
+services, and utilities defined in one file but called from multiple distinct files.
+These are candidates for purpose-level verification: did the synthesizer correctly
+trace each shared element to all its distinct user-facing purposes?
+
+**Example:** A `StartPlaylist` function called from a scheduled automation, a music
+browse screen, and a control center button should produce three distinct behaviors
+(one per calling context), not one generic "start playlist" behavior.
+
+1. Read `coverage-audit.json` and extract the `shared_elements` list.
+2. If the list is empty, skip to 4.5b.
+3. **Spawn purpose-auditor teammates in batches of up to 5.** Each teammate gets a
+   subset of shared elements (up to 10 elements per teammate). Assign each the
+   `feature-inventory:purpose-auditor` agent.
+4. **Each teammate receives** via its task description:
+   - Its assigned shared elements (with callers list from coverage-audit.json)
+   - Path to `docs/features/details/` (synthesis output)
+   - Path to `docs/features/raw/` (dimension analysis)
+   - Repo path
+   - Output path: `docs/features/purpose-audit-{batch}.md`
+5. **Batch-level hard stop applies.** Purpose audit batches count toward the 2-batch
+   cadence. See `references/context-management.md` § "Batch-Level Hard Stop Protocol."
+6. After all purpose auditors complete, **collect their findings**:
+   - **COVERED** elements: no action needed
+   - **COLLAPSED** elements: the synthesis has a single generic behavior that needs to
+     be split into purpose-specific behaviors
+   - **PARTIALLY_COVERED** elements: some purposes have behaviors, others are missing
+   - **MISSING** elements: not in synthesis at all
+
+7. **For COLLAPSED and PARTIALLY_COVERED findings**, spawn synthesizer teammates in
+   **verify mode** with specific instructions about the missing purposes:
+   ```
+   mode: "verify"
+   purpose_gaps: [
+     {
+       "element": "StartPlaylist",
+       "defined_in": "src/services/PlaylistService.js",
+       "missing_purposes": [
+         {"context": "Scheduled automation", "callers": ["src/automation/ScheduleRunner.js"]},
+         {"context": "Control center button", "callers": ["src/ui/ControlCenter.js"]}
+       ],
+       "existing_behavior": "F-003.02.01 (generic start playlist)"
+     }
+   ]
+   instruction: "The existing behavior F-003.02.01 describes StartPlaylist generically.
+   Create separate behavior files for each missing purpose. The scheduled automation
+   case likely has different error handling (retry logic, no user feedback) and the
+   control center button case needs UI feedback (button state, loading indicator).
+   Read each caller file to understand its specific context and requirements."
+   ```
+
+8. Present purpose audit summary to the user:
+   ```
+   Purpose Audit (Shared Infrastructure Tracing)
+   ===============================================
+   Shared elements audited: {N}
+   Skipped (not feature-relevant): {N}
+   Fully covered: {N}
+   Collapsed (one behavior, multiple purposes): {N} → being split
+   Partially covered: {N} → missing purposes being added
+   Missing from synthesis: {N} → being added
+
+   {N} new behaviors created to represent distinct purposes.
+   ```
+
+#### 4.5b: Identify Candidates for User Resolution
+
+Scan all detail files produced in 4b (and updated by purpose audit in 4.5a) to find
+items that need user input. A feature is a **resolution candidate** if any of these apply:
 
 1. **Thin spec** — The detail file for a sub-feature has fewer than 10 lines of substantive
    content (excluding headers, boilerplate, and empty sections). A behavior file with only
@@ -810,7 +930,7 @@ Build a resolution list:
 }
 ```
 
-#### 4.5b: Present Candidates and Interview the User
+#### 4.5c: Present Candidates and Interview the User
 
 For each candidate, ask the user a targeted question with three possible outcomes:
 
@@ -857,7 +977,7 @@ Options:
   [Remove]  — It's dead code / not needed
 ```
 
-#### 4.5c: Apply Resolutions
+#### 4.5d: Apply Resolutions
 
 For each user response:
 
@@ -893,7 +1013,7 @@ For each user response:
 Save all resolutions to `./docs/features/clarifications-features.md` with
 the feature ID, resolution type, and user's explanation for each.
 
-#### 4.5d: Batch Processing
+#### 4.5e: Batch Processing
 
 Present candidates to the user in batches of 5-8 to avoid overwhelming them. Group
 related candidates together (e.g., all overlaps in one batch, then thin specs, then
@@ -928,7 +1048,8 @@ resolution candidates, context is heavy. Evaluate and clear if needed.
 
 Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
 `clarifications-features.md`, `discovery.json`, `plan.json`, `raw/*`,
-`coverage-audit.json`, `synthesis-plan.json`, `details/*` (with resolutions applied)
+`coverage-audit.json`, `purpose-audit-*.md`, `synthesis-plan.json`,
+`details/*` (with resolutions applied)
 
 ### 4c: Build the Index (Orchestrator — after all teammates finish)
 
@@ -1043,7 +1164,7 @@ These are cheap to rebuild and may be stale if raw data changed:
 ```bash
 rm -f ./docs/features/synthesis-plan.json
 rm -f ./docs/features/coverage-audit.json
-rm -f ./docs/features/coverage-audit-v2.json
+rm -f ./docs/features/purpose-audit-*.md
 rm -f ./docs/features/FEATURE-INDEX.md
 rm -f ./docs/features/FEATURE-INDEX.json
 ```

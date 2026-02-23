@@ -1,6 +1,6 @@
 {
   "name": "feature-inventory",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "description": "Reverse-engineers every feature across codebases using Agent Teams. Builds a code reference index, hunts indirect connections, constructs an outcome graph, and derives features from outcomes — not implementations. Includes graph-based and dimension-based inventory pipelines, gap analysis, plan generation with TDD stubs, incremental reindex, and marketing catalog generation. REQUIRES Agent Teams enabled.",
   "author": {
     "name": "Control Play"

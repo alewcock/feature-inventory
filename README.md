@@ -1,10 +1,12 @@
 # feature-inventory
 
-**v7.0.0**
+**v8.0.0**
 
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Builds a code reference index, hunts for every indirect connection (events, IPC, pub/sub, reactive chains), constructs an outcome graph, and derives features from what the code ACHIEVES — not how it's structured. Features describe outcomes, freeing re-implementors to build optimally without replicating legacy architecture.
 
 Also transforms the inventory into fully decomposed, implementation-ready plans for your target architecture and marketing-ready product catalogs for go-to-market teams.
+
+New in v8: **phase-delegated graph pipeline** — `create-graph` is now a thin coordinator that delegates each phase to a dedicated command (`build-index`, `build-graph`, `annotate-pathways`, `derive-features`). Each phase command owns its full orchestration logic, making the pipeline modular and independently resumable. Also introduces per-file connection hunting (each agent gets ONE file, hunts all 11 connection types in/out of it, writes results immediately, then terminates — connections found from both ends are deduplicated at merge), an agent liveness protocol (heartbeat markers every 2 min, orchestrator checks file modification times before assuming death, presents stuck agents to user instead of auto-canceling), tree-sitter AST parsing for mechanical indexing (deterministic, no LLM calls — with Grep+Read fallback for restricted environments), and SQL/MySQL support (tables, views, stored procedures, triggers, indexes, foreign keys, events, migrations).
 
 New in v7: **graph-based feature discovery** — a fundamentally new bottom-up pipeline (`/feature-inventory:create-graph`) that mechanically indexes every symbol in the codebase, relentlessly hunts for indirect connections (events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing), constructs an outcome graph tracing entry points through pathways to final outcomes, annotates each pathway with 6 dimensions (data, auth, logic, UI, config, side effects), and derives features from outcomes. Uses SQLite (`graph.db`) for the index/graph — queryable, incrementally updatable, scales to 50k+ symbols. Includes Rust, Swift, and Objective-C extraction patterns. Also adds `/feature-inventory:reindex` for incremental updates after code changes — identifies affected files, re-indexes symbols, re-traces pathways, flags features, and generates user-facing change notes in feature terms.
 
@@ -146,6 +148,10 @@ Phase 5: Index Maintenance
 |---------|-------------|
 | `/feature-inventory:create [path]` | Run the dimension-based inventory analysis (top-down, 9 dimensions) |
 | `/feature-inventory:create-graph [path]` | Run the graph-based inventory pipeline (bottom-up, outcome-focused) |
+| `/feature-inventory:build-index [path]` | Phase 1: Build enriched code index (tree-sitter indexing + per-file connection hunting) |
+| `/feature-inventory:build-graph [path]` | Phase 2: Build outcome graph (entry points → pathways → final outcomes) |
+| `/feature-inventory:annotate-pathways [path]` | Phase 3: Annotate pathways with 6 dimensions (data, auth, logic, UI, config, side effects) |
+| `/feature-inventory:derive-features [path]` | Phase 4: Derive features from annotated pathways, build index, validate |
 | `/feature-inventory:reindex [--since commit] [--diff branch]` | Incrementally update the graph inventory after code changes |
 | `/feature-inventory:gap-analysis [new-project] [inventory-path]` | Compare a new project against the inventory |
 | `/feature-inventory:plan [inventory-path]` | Generate implementation plans from a completed inventory |
@@ -210,26 +216,29 @@ The plugin will:
 /feature-inventory:create-graph [path-to-repo-or-parent-directory]
 ```
 
-The graph pipeline discovers features bottom-up from what the code does:
+The graph pipeline discovers features bottom-up from what the code does. `create-graph` is a thin coordinator that delegates each phase to a dedicated command:
+
 1. **Interview you** about the product (reuses existing `interview.md` if present)
 2. **Discover** the repo structure and tech stack
-3. **Build enriched index** (Phase 1 — delegated to `build-index`):
-   - Tree-sitter indexes every symbol into SQLite
-   - Per-file agents hunt indirect connections (events, IPC, pub/sub, DB triggers, etc.)
+3. **Build enriched index** (Phase 1 — delegates to `/feature-inventory:build-index`):
+   - Tree-sitter AST parsing indexes every symbol into SQLite (deterministic, no LLM calls)
+   - Per-file agents hunt all 11 types of indirect connections in/out of each file
    - Interview you to resolve connections that couldn't be traced automatically
    - Enrich call graph with indirect edges
-4. **Build outcome graph** (Phase 2 — delegated to `build-graph`):
+4. **Build outcome graph** (Phase 2 — delegates to `/feature-inventory:build-graph`):
    - Identify entry points and final outcomes
    - Trace pathways between them
    - Interview you about orphan routes, unreachable outcomes, graph gaps
-5. **Annotate pathways** (Phase 3 — delegated to `annotate-pathways`):
+5. **Annotate pathways** (Phase 3 — delegates to `/feature-inventory:annotate-pathways`):
    - Annotate each pathway with 6 dimensions (data, auth, logic, UI, config, side effects)
    - Extract exact values from source code at each step
-6. **Derive features, build index & validate** (Phase 4 — delegated to `derive-features`):
+6. **Derive features, build index & validate** (Phase 4 — delegates to `/feature-inventory:derive-features`):
    - Cluster pathways into feature areas
    - Derive features named by what users achieve, not how code is structured
    - Interview you for quality resolution
    - Validate every pathway claimed by exactly one feature
+
+Each phase command is independently resumable — after a `/clear` or interruption, re-run `create-graph` and it resumes from the last completed phase.
 
 All structured data (index, connections, graph, annotations) lives in a single SQLite database (`docs/features/graph.db`). Feature detail files are the same markdown format as the dimension pipeline.
 

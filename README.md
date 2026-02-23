@@ -1,8 +1,12 @@
 # feature-inventory
 
-**v6.0.0**
+**v7.0.0**
 
-A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis, then transforms the inventory into fully decomposed, implementation-ready plans for your target architecture and marketing-ready product catalogs for go-to-market teams.
+A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Builds a code reference index, hunts for every indirect connection (events, IPC, pub/sub, reactive chains), constructs an outcome graph, and derives features from what the code ACHIEVES — not how it's structured. Features describe outcomes, freeing re-implementors to build optimally without replicating legacy architecture.
+
+Also transforms the inventory into fully decomposed, implementation-ready plans for your target architecture and marketing-ready product catalogs for go-to-market teams.
+
+New in v7: **graph-based feature discovery** — a fundamentally new bottom-up pipeline (`/feature-inventory:create-graph`) that mechanically indexes every symbol in the codebase, relentlessly hunts for indirect connections (events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing), constructs an outcome graph tracing entry points through pathways to final outcomes, annotates each pathway with 6 dimensions (data, auth, logic, UI, config, side effects), and derives features from outcomes. Uses SQLite (`graph.db`) for the index/graph — queryable, incrementally updatable, scales to 50k+ symbols. Includes Rust, Swift, and Objective-C extraction patterns. Also adds `/feature-inventory:reindex` for incremental updates after code changes — identifies affected files, re-indexes symbols, re-traces pathways, flags features, and generates user-facing change notes in feature terms.
 
 New in v6: **batch-level hard stops** — the orchestrator now performs a mandatory hard stop after every 2 completed agent batches during long-running steps. This prevents the catastrophic "prompt is too long" crash that occurred when the orchestrator ran for hours monitoring 100+ agents without ever yielding control. The VS Code context percentage UI does not update during a long-running turn, so without hard stops the user has zero visibility into context health. After each hard stop, the user can `/compact` or `/clear` and re-run — the command resumes from the progress file at the exact next batch.
 
@@ -76,7 +80,13 @@ This overwrites the existing installation with the latest release.
 
 When migrating a legacy product (10-20+ years) to new languages and platforms, you need a specification complete enough that an AI/agent team could implement the full rebuild without ever seeing the original source code. This plugin produces that specification.
 
-It interviews the user to capture tribal knowledge, then systematically analyzes the codebase across 9 dimensions in parallel using Agent Teams, and produces a hierarchical feature index where every entry links to a detailed specification file.
+Two pipelines are available:
+
+- **Graph pipeline** (`create-graph`) — Bottom-up discovery. Indexes every symbol, hunts all indirect connections, builds an outcome graph, and derives features from what the code achieves. Produces outcome-focused features that describe WHAT to build, with source maps showing HOW the legacy system did it. Best for large, interconnected codebases where indirect connections (events, IPC, pub/sub) are critical.
+
+- **Dimension pipeline** (`create`) — Top-down analysis. Analyzes the codebase across 9 dimensions in parallel, then synthesizes features from the combined analysis. Best for getting started quickly or for codebases where the architecture is relatively straightforward.
+
+Both pipelines produce the same output format: a hierarchical feature index where every entry links to a detailed specification file.
 
 **Nothing is too small.** A tooltip, a default sort order, a 3-line validation rule, a retry delay, a password complexity requirement, an error message string - if the product exhibits the behavior, it gets documented.
 
@@ -84,13 +94,33 @@ It interviews the user to capture tribal knowledge, then systematically analyzes
 
 | Command | Description |
 |---------|-------------|
-| `/feature-inventory:create [path]` | Run the full inventory analysis |
+| `/feature-inventory:create [path]` | Run the dimension-based inventory analysis (top-down, 9 dimensions) |
+| `/feature-inventory:create-graph [path]` | Run the graph-based inventory pipeline (bottom-up, outcome-focused) |
+| `/feature-inventory:reindex [--since commit] [--diff branch]` | Incrementally update the graph inventory after code changes |
 | `/feature-inventory:gap-analysis [new-project] [inventory-path]` | Compare a new project against the inventory |
 | `/feature-inventory:plan [inventory-path]` | Generate implementation plans from a completed inventory |
 | `/feature-inventory:marketing-catalog [inventory-path]` | Generate a marketing-ready product catalog for go-to-market teams |
 | `/feature-inventory:status` | Check progress of inventory, gap analysis, plan generation, or marketing catalog |
 
-## What It Analyzes (9 Dimensions)
+## What It Analyzes
+
+### Graph Pipeline (create-graph)
+
+The graph pipeline indexes the codebase mechanically and discovers features from outcomes:
+
+| Layer | What It Produces |
+|-------|-----------------|
+| **Code Reference Index** | Every symbol (function, class, method, route, constant, type, variable, import) with definitions, call sites, signatures, exports |
+| **Indirect Connections** | Events, IPC, pub/sub, observables, DB triggers, middleware chains, DI bindings, convention routing, dispatch tables, webhooks, file watchers |
+| **Outcome Graph** | Entry points (HTTP routes, CLI commands, cron jobs, UI events, message consumers, etc.) → pathways → final outcomes (data mutations, HTTP responses, emails, external API calls, etc.) |
+| **Pathway Annotations** | 6 dimensions per pathway: data model, auth, business logic, UI, configuration, side effects — each with source maps back to the index |
+| **Feature Hierarchy** | Features named by outcome (what users achieve), not implementation (how code is structured) |
+
+Supports: JavaScript/TypeScript, C#/.NET, Python, Ruby, Java/Kotlin, Go, PHP, Rust, Swift, Objective-C, C/C++.
+
+### Dimension Pipeline (create)
+
+The dimension pipeline analyzes the codebase across 9 independent dimensions:
 
 | Dimension | What It Captures |
 |-----------|-----------------|
@@ -123,6 +153,38 @@ The plugin will:
 8. **Generate detail files** for every feature and behavior
 9. **Interview you again** to resolve thin, ambiguous, or overlapping features
 10. **Validate** against your original feature map
+
+### Create a graph-based feature inventory
+
+```
+/feature-inventory:create-graph [path-to-repo-or-parent-directory]
+```
+
+The graph pipeline discovers features bottom-up from what the code does:
+1. **Interview you** about the product (reuses existing `interview.md` if present)
+2. **Discover** the repo structure and tech stack
+3. **Index** every symbol in the codebase (functions, classes, methods, routes, constants, types, variables, imports) into SQLite
+4. **Hunt** for every indirect connection (events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing)
+5. **Interview you** to resolve connections that couldn't be traced automatically
+6. **Build** the outcome graph (entry points → pathways → final outcomes)
+7. **Interview you** about orphan routes and unreachable outcomes (never silently classified as dead code)
+8. **Annotate** each pathway with 6 dimensions (data, auth, logic, UI, config, side effects)
+9. **Derive** features from annotated pathways — named by what users achieve, not how code is structured
+10. **Validate** every pathway claimed by exactly one feature, every entry point in at least one feature
+
+All structured data (index, connections, graph, annotations) lives in a single SQLite database (`docs/features/graph.db`). Feature detail files are the same markdown format as the dimension pipeline.
+
+If a previous dimension-pipeline run exists, the graph pipeline reuses `interview.md`, `discovery.json`, and `clarifications.md`, and cross-references the previous raw dimension outputs to validate completeness.
+
+### Incrementally update after code changes
+
+```
+/feature-inventory:reindex [--since <commit|tag>] [--diff <branch>]
+```
+
+After code changes, updates the graph inventory without regenerating from scratch. Identifies changed files via git diff, re-indexes affected symbols, re-hunts connections, re-traces pathways, and generates user-facing change notes describing what changed in feature terms (not code terms). Output written to `docs/features/change-notes/`.
+
+Requires a completed graph-based inventory (`docs/features/graph.db`).
 
 ### Run a gap analysis
 
@@ -182,7 +244,32 @@ Just run `/feature-inventory:create` again. It detects completed work and picks 
 
 ## Output Structure
 
-### Feature Inventory
+### Feature Inventory (Graph Pipeline)
+
+```
+docs/features/
+├── FEATURE-INDEX.md           # Master table of contents (names + links only)
+├── FEATURE-INDEX.json         # Machine-readable with pathway/source map metadata
+├── details/                   # One spec file per feature/behavior
+│   ├── F-001.md              # Major feature overview
+│   ├── F-001.01.md           # Sub-feature with pathway references
+│   ├── F-001.01.01.md        # Behavior with source maps to index
+│   └── ...
+├── graph.db                   # SQLite database (index, connections, graph, annotations)
+├── intermediate/              # JSONL teammate output (deletable after merge)
+│   ├── index--*.jsonl        # Indexer output per scope
+│   ├── connections--*.jsonl  # Connection hunter output
+│   └── annotations--*.jsonl  # Annotator output per pathway group
+├── change-notes/              # User-facing change notes from reindex runs
+│   └── {date}-{hash}.md
+├── interview.md               # User interview answers
+├── user-feature-map.md        # User's mental model of features
+├── clarifications.md          # Resolved ambiguities (connections + graph)
+├── clarifications-features.md # Resolved ambiguities (feature specs)
+└── discovery.json, plan.json
+```
+
+### Feature Inventory (Dimension Pipeline)
 
 ```
 docs/features/
@@ -320,6 +407,18 @@ Plan output is designed to work with multiple implementation tools:
 
 ## Agents
 
+### Graph Pipeline Agents
+
+| Agent | Purpose |
+|-------|---------|
+| `code-indexer` | Mechanically indexes every symbol: functions, classes, methods, routes, constants, types, variables, imports. Records definitions, call sites, signatures, exports. Flags dynamic dispatch for connection hunter |
+| `connection-hunter` | Hunts 11 types of indirect connections: events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing, dispatch tables, webhooks, file watchers. Interviews user for unresolvable connections |
+| `graph-builder` | Constructs outcome graph: identifies entry points and final outcomes, traces pathways through the enriched call graph, detects fan-out points, classifies infrastructure, validates coverage |
+| `pathway-dimension-annotator` | Annotates each pathway with 6 dimensions (data, auth, logic, UI, config, side effects). Every annotation includes source maps back to the code reference index |
+| `feature-deriver` | Clusters annotated pathways into features named by outcome. Builds hierarchy (major → sub-feature → behavior) with links, source maps, and test cases |
+
+### Dimension Pipeline Agents
+
 | Agent | Purpose |
 |-------|---------|
 | `api-analyzer` | API endpoints, request/response schemas, auth, errors |
@@ -332,6 +431,11 @@ Plan output is designed to work with multiple implementation tools:
 | `config-analyzer` | Env vars, config files, feature flags |
 | `events-analyzer` | Events, payload schemas, subscribers, middleware |
 | `feature-synthesizer` | Cross-references all dimensions to produce detail files (create/verify modes) |
+
+### Shared Agents
+
+| Agent | Purpose |
+|-------|---------|
 | `gap-analyzer` | Compares new project against inventory for one feature area |
 | `plan-writer` | Produces implementation plans for one feature area (create/update modes) |
 | `plan-section-writer` | Writes self-contained implementation section files in parallel |
@@ -353,7 +457,26 @@ After Step 2, edit `./docs/features/plan.json` to remove dimensions or adjust di
 
 Agent Teams is token-intensive. Each teammate is a full Claude Code session.
 
-### Feature Inventory (create)
+### Feature Inventory — Graph Pipeline (create-graph)
+
+For a medium-sized product (3 repos, ~50,000 lines):
+- Interview: ~10k tokens (skipped if `interview.md` exists)
+- Discovery + Planning: ~20k tokens
+- Code indexing (parallel teammates): ~300k tokens across teammates
+- SQLite merge + cross-referencing: ~30k tokens
+- Connection hunting (parallel teammates): ~200k tokens across teammates
+- User interview for unresolved connections: ~20-50k tokens
+- Graph building: ~100k tokens
+- User interview for orphans/unreachables: ~20-50k tokens
+- Pathway annotation (parallel teammates): ~400k tokens across teammates
+- Feature derivation (parallel teammates): ~200k tokens across teammates
+- Validation + index: ~50k tokens
+
+Subtotal: ~1.3M-1.5M tokens.
+
+The graph pipeline is more token-intensive than the dimension pipeline for initial creation, but produces incrementally updatable artifacts. Subsequent `reindex` runs are much cheaper — typically 50k-200k tokens depending on change scope.
+
+### Feature Inventory — Dimension Pipeline (create)
 
 For a medium-sized product (3 repos, all 9 dimensions), expect roughly:
 - Interview: ~10k tokens
@@ -389,4 +512,4 @@ For a medium-sized inventory (15 major features):
 
 Subtotal: ~700k-800k tokens.
 
-**Claude Max subscription strongly recommended.** The combined workflow (create + gap-analysis + plan + marketing-catalog) can exceed 3M tokens for medium products.
+**Claude Max subscription strongly recommended.** The combined workflow (create-graph + gap-analysis + plan + marketing-catalog) can exceed 4M tokens for medium products.

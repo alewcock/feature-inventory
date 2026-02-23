@@ -38,13 +38,17 @@ description: >
 ---
 
 You are the orchestrator for a graph-based product reverse-engineering effort. Unlike the
-dimension-analysis approach, this pipeline discovers features BOTTOM-UP:
+dimension-analysis approach, this pipeline discovers features BOTTOM-UP through four phases:
 
-1. **Index** every symbol in the codebase (mechanical, exhaustive)
-2. **Hunt** for every indirect connection (events, IPC, pub/sub, reactive chains, etc.)
-3. **Build** the outcome graph (entry points → pathways → final outcomes)
-4. **Annotate** each pathway with dimensional information (data, auth, logic, UI, config, side effects)
-5. **Derive** features from annotated pathways (cluster, name, describe, link)
+- **Phase 1 — Discovery + Index:** Discover the repo structure (languages, frameworks,
+  modules, size); mechanically index every symbol; hunt every indirect connection (events,
+  IPC, pub/sub, reactive chains, etc.)
+- **Phase 2 — Graph Construction:** Build the outcome graph (entry points → pathways →
+  final outcomes)
+- **Phase 3 — Pathway Annotation:** Annotate each pathway with dimensional information
+  (data, auth, logic, UI, config, side effects)
+- **Phase 4 — Feature Derivation:** Derive features from annotated pathways (cluster,
+  name, describe, link)
 
 The result is the same feature hierarchy (F-001.md, F-001.01.md, F-001.01.01.md) but
 discovered from what the code DOES (outcomes) rather than how it's structured (dimensions).
@@ -75,7 +79,7 @@ Save answers to `./docs/features/interview.md` and the user-provided feature map
 
 **MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
 
-## Step 1: Discovery
+## Step 1: Discovery (Phase 1 — Part 1)
 
 **Identical to the standard pipeline.** Scan the codebase to identify repositories,
 languages, frameworks, size, module structure, and vendor/generated code patterns.
@@ -157,7 +161,7 @@ Write to `./docs/features/plan.json`.
 
 **MANDATORY — CLEAR STRONGLY RECOMMENDED.** Step 3 (indexing) is context-intensive.
 
-## Step 3: Build Enriched Index (Phase 1)
+## Step 3: Build Enriched Index (Phase 1 — Part 2)
 
 **Delegate to `commands/build-index.md`.**
 

@@ -21,8 +21,9 @@ and its signature. You do NOT interpret what anything means — you record struc
 You will receive:
 - `repo_path`: Absolute path to the repository
 - `scope`: "full" or comma-separated directories/files
-- `output_path`: Where to write the index (JSON)
-- `languages`: Primary languages in scope (e.g., ["typescript", "python", "csharp"])
+- `output_path`: Where to write the index (JSONL intermediate, merged to SQLite)
+- `db_path`: Path to the SQLite database (if merging into an existing DB)
+- `languages`: Primary languages in scope (e.g., ["typescript", "python", "csharp", "rust", "swift"])
 - `frameworks`: Detected frameworks (e.g., ["express", "react", "electron"])
 - `product_context`: Brief summary of what this product does (for ambiguous cases only)
 
@@ -226,6 +227,72 @@ Record every import to build the dependency graph between files:
 - **Constants:** `const Name =`, `const ( ... )`
 - **Exports:** Capitalized names are exported
 
+### Rust
+- **Functions:** `fn name(`, `pub fn name(`, `async fn name(`
+- **Structs:** `struct Name`, `pub struct Name`
+- **Enums:** `enum Name`, `pub enum Name` (extract each variant as a constant-like entry)
+- **Traits:** `trait Name`, `pub trait Name` (capture required methods as members)
+- **Impl blocks:** `impl Name`, `impl Trait for Name` — link methods to their struct/trait
+- **Macros:** `macro_rules! name`, `#[derive(...)]` (record derive macros on structs,
+  these generate code the connection hunter must account for)
+- **Modules:** `mod name`, `pub mod name`, `use crate::module::Symbol`
+- **Constants:** `const NAME: Type =`, `static NAME: Type =`
+- **Async:** `async fn`, `.await` call sites (record these as they affect call chains)
+- **FFI:** `extern "C" fn`, `#[no_mangle]` (flag for connection hunter — may be called
+  from C/C++ or other languages)
+- **Attributes:** `#[test]`, `#[tokio::main]`, `#[actix_web::main]`, `#[get("/")]`,
+  `#[post("/")]` (framework route attributes)
+- **Closures:** Closures passed to `.map()`, `.filter()`, `.and_then()`, `spawn()`
+  — record when they contain calls to other indexed symbols
+- **NOTE on ownership:** Rust's borrow system doesn't affect the index (it's structural,
+  not semantic). But `Arc<Mutex<T>>` and `Rc<RefCell<T>>` wrappers suggest shared
+  mutable state — flag these for the connection hunter as potential reactive points.
+
+### Swift
+- **Functions:** `func name(`, `class func name(`, `static func name(`
+- **Classes:** `class Name`, `class Name: Base, Protocol`
+- **Structs:** `struct Name`, `struct Name: Protocol`
+- **Enums:** `enum Name`, `enum Name: Type` (extract cases as members)
+- **Protocols:** `protocol Name` (capture required methods/properties)
+- **Extensions:** `extension Name`, `extension Name: Protocol` — link added methods
+  to the extended type
+- **Properties:** `var name: Type`, `let name: Type`, `@Published var name`,
+  `@State var name`, `@Binding var name`
+- **Initializers:** `init(`, `convenience init(`, `required init(`
+- **Constants:** `let NAME =` at module scope, `static let`
+- **Imports:** `import Module`, `@_implementationOnly import Module`
+- **Closures:** Record closures passed to completion handlers, especially
+  `completionHandler: @escaping (Result<T, Error>) -> Void` patterns
+- **SwiftUI:** `var body: some View` (component definition), `@StateObject`,
+  `@ObservedObject`, `@EnvironmentObject` (flag for connection hunter — these
+  are reactive observation points)
+- **Combine:** `Publisher`, `Subscriber`, `.sink(`, `.assign(`, `@Published`
+  (flag for connection hunter as reactive chains)
+- **Concurrency:** `async`, `await`, `Task {`, `actor Name` (structured concurrency
+  entry points and actors as isolation boundaries)
+
+### Objective-C
+- **Methods:** `- (ReturnType)name:`, `+ (ReturnType)name:` (instance/class methods)
+- **Classes:** `@interface Name : Base`, `@implementation Name`
+- **Protocols:** `@protocol Name`, `<ProtocolName>` conformance
+- **Properties:** `@property (nonatomic, strong) Type *name`
+- **Categories:** `@interface Name (CategoryName)` — link added methods to base class
+- **Constants:** `#define NAME`, `extern NSString *const Name`, `static const`
+- **Imports:** `#import "Header.h"`, `#import <Framework/Header.h>`, `@import Module`
+- **Blocks:** `^(Type param) { ... }` — record when passed as callbacks
+- **Selectors:** `@selector(name:)`, `performSelector:` — flag for connection hunter,
+  these are string-based dynamic dispatch
+- **KVO:** `addObserver:forKeyPath:`, `observeValueForKeyPath:` — flag for connection
+  hunter as reactive observation
+- **Notifications:** `NSNotificationCenter` `addObserver:selector:name:`,
+  `postNotificationName:` — flag for connection hunter as event emitter/listener
+- **Delegate patterns:** `@property (weak) id<DelegateProtocol> delegate` — the
+  delegate assignment is an indirect connection the connection hunter must trace
+- **NOTE:** Objective-C's runtime dynamism (message passing, method swizzling,
+  `respondsToSelector:`) means many connections are invisible to static indexing.
+  Flag ALL `performSelector:`, `respondsToSelector:`, `NSClassFromString`,
+  `NSSelectorFromString` for the connection hunter.
+
 ## Handling Untyped / Dynamic Languages
 
 For JavaScript, Python, Ruby, and other dynamic languages:
@@ -262,59 +329,137 @@ For JavaScript, Python, Ruby, and other dynamic languages:
    d. Third pass: Grep for imports at the top of the file.
    e. Write all symbols from this file to the intermediate output.
 
-4. **Write intermediate format** (one JSON object per line, for append-friendliness):
+4. **Write intermediate format** (JSONL — one JSON object per line, append-only):
    ```
    {"type":"function","name":"calculate",...}
    {"type":"class","name":"ShippingService",...}
    ```
+   JSONL is the teammate output format. Each teammate writes to its own `.jsonl` file.
+   The orchestrator merges these into SQLite in Step 3c.
 
 5. **After all files are processed: cross-reference pass.**
    - For each `calls` entry, find the matching definition and record the reverse
      `called_by` edge.
    - For each `import`, resolve the source path to an actual file.
    - For each `exports` entry, find all files that import it.
-   - Write the final merged index as valid JSON.
 
-6. **Write the final index** to `output_path`.
+6. **Write the final output.** If `db_path` is provided, insert into the SQLite database
+   (the orchestrator handles DB creation). Otherwise, write JSONL to `output_path`.
 
-## Output Schema
+## Storage Format
 
-The final output is a JSON file:
+### Intermediate: JSONL (teammate output)
 
-```json
-{
-  "generated_at": "ISO-8601",
-  "repo": "repo-name",
-  "scope": "full",
-  "languages": ["typescript"],
-  "files_indexed": 234,
-  "total_symbols": 1847,
-  "symbols": [
-    { ... symbol entries ... }
-  ],
-  "imports": [
-    { ... import entries ... }
-  ],
-  "file_manifest": [
-    {"file": "src/services/shipping.ts", "lines": 200, "symbols": 12, "status": "done"},
-    {"file": "src/services/billing.ts", "lines": 450, "symbols": 28, "status": "done"}
-  ],
-  "statistics": {
-    "by_type": {
-      "function": 423,
-      "class": 67,
-      "method": 312,
-      "route": 45,
-      "constant": 89,
-      "interface": 34,
-      "enum": 12,
-      "variable": 156,
-      "import": 709
-    },
-    "dynamic_calls": 23,
-    "untyped_params": 156
-  }
-}
+Each teammate writes one JSON object per line to its `.jsonl` output file. This is
+append-only and crash-safe — if the teammate dies mid-file, all previously written
+lines are valid.
+
+### Final: SQLite (orchestrator merges)
+
+The orchestrator merges all JSONL files into a single SQLite database. SQLite is used
+because:
+- **Queryable:** Agents can `SELECT * FROM symbols WHERE file = 'src/services/order.ts'`
+  instead of loading 50,000+ symbols into context
+- **Incremental:** On code changes, UPDATE/INSERT only affected rows instead of
+  rewriting the entire file
+- **Relational:** Call edges, imports, and connections are naturally JOIN-able
+- **Single file:** No external database server, just a `.db` file on disk
+
+### SQLite Schema
+
+```sql
+CREATE TABLE metadata (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+-- Keys: generated_at, repo, scope, languages, files_indexed, total_symbols
+
+CREATE TABLE symbols (
+  id TEXT PRIMARY KEY,          -- SYM-0001
+  type TEXT NOT NULL,           -- function, class, method, route, constant, etc.
+  name TEXT NOT NULL,
+  qualified_name TEXT,
+  file TEXT NOT NULL,
+  line_start INTEGER NOT NULL,
+  line_end INTEGER,
+  signature_json TEXT,          -- JSON: {params: [...], return_type: "..."}
+  visibility TEXT,              -- public, private, protected, internal
+  is_async INTEGER DEFAULT 0,
+  decorators_json TEXT,         -- JSON array of decorator strings
+  exports_json TEXT,            -- JSON array: ["named"], ["default"], []
+  caller_count INTEGER DEFAULT 0,
+  extra_json TEXT               -- Any type-specific fields not in standard columns
+);
+
+CREATE TABLE calls (
+  caller_id TEXT NOT NULL REFERENCES symbols(id),
+  callee_id TEXT,               -- NULL if unresolved (dynamic dispatch)
+  callee_name TEXT NOT NULL,    -- Always populated even if callee_id is NULL
+  call_file TEXT,
+  call_line INTEGER,
+  connection_type TEXT DEFAULT 'direct',  -- direct, event, ipc, pubsub, etc.
+  UNIQUE(caller_id, callee_name, call_line)
+);
+
+CREATE TABLE imports (
+  file TEXT NOT NULL,
+  line INTEGER,
+  source TEXT NOT NULL,         -- Import specifier as written
+  resolved_file TEXT,           -- Resolved absolute/relative path
+  symbols_json TEXT             -- JSON array of imported symbol names
+);
+
+CREATE TABLE file_manifest (
+  file TEXT PRIMARY KEY,
+  lines INTEGER NOT NULL,
+  symbols_count INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'pending' -- pending, done, incomplete, skipped
+);
+
+CREATE TABLE connection_hints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,           -- dynamic_call, string_key_dispatch, framework_magic, reflection
+  file TEXT NOT NULL,
+  line INTEGER NOT NULL,
+  expression TEXT,
+  note TEXT,
+  resolved INTEGER DEFAULT 0   -- Set to 1 after connection hunter processes it
+);
+
+-- Indexes for common query patterns
+CREATE INDEX idx_symbols_file ON symbols(file);
+CREATE INDEX idx_symbols_name ON symbols(name);
+CREATE INDEX idx_symbols_type ON symbols(type);
+CREATE INDEX idx_symbols_qualified ON symbols(qualified_name);
+CREATE INDEX idx_calls_caller ON calls(caller_id);
+CREATE INDEX idx_calls_callee ON calls(callee_id);
+CREATE INDEX idx_calls_callee_name ON calls(callee_name);
+CREATE INDEX idx_imports_file ON imports(file);
+CREATE INDEX idx_imports_resolved ON imports(resolved_file);
+```
+
+### Querying the Index
+
+Agents downstream of the indexer (connection hunter, graph builder, annotator) query
+the SQLite database directly rather than loading the full index:
+
+```sql
+-- Find all symbols in a file
+SELECT * FROM symbols WHERE file = 'src/services/order.ts';
+
+-- Find all callers of a function
+SELECT s.* FROM symbols s
+JOIN calls c ON c.caller_id = s.id
+WHERE c.callee_name = 'calculateShippingCost';
+
+-- Find all symbols with no callers (potential entry points)
+SELECT * FROM symbols WHERE caller_count = 0 AND type = 'route';
+
+-- Find unresolved connection hints for a specific type
+SELECT * FROM connection_hints WHERE type = 'dynamic_call' AND resolved = 0;
+
+-- Find all symbols exported from a file
+SELECT * FROM symbols WHERE file = 'src/services/order.ts' AND exports_json != '[]';
 ```
 
 ## What to Flag for Connection Hunter

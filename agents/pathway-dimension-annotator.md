@@ -26,13 +26,20 @@ all dimensions. This is interpretation work — you're adding meaning to structu
 ## Input
 
 You will receive:
-- `pathways`: A list of pathway objects from the outcome graph (with step symbols,
-  files, lines, entry point, final outcome)
-- `index_path`: Path to the code-reference-index.json
-- `connections_path`: Path to connections.json
+- `pathway_ids`: List of pathway IDs to annotate (e.g., ["PW-001", "PW-002", ...])
+- `db_path`: Path to the SQLite database (contains symbols, calls, connections,
+  entry_points, final_outcomes, pathways, pathway_steps tables)
 - `repo_path`: Absolute path to the repository
-- `output_path`: Where to write annotated pathways
+- `output_path`: Where to write annotated pathways (JSONL intermediate)
 - `product_context`: Brief summary of what this product does
+
+Query pathways and their steps directly from SQLite:
+```sql
+SELECT ps.*, s.signature_json, s.type as symbol_type
+FROM pathway_steps ps
+LEFT JOIN symbols s ON ps.symbol_id = s.id
+WHERE ps.pathway_id = ? ORDER BY ps.step_order;
+```
 
 ## Context Window Discipline
 
@@ -303,8 +310,8 @@ What events are emitted, what jobs are queued, what integrations are called?
    early steps — annotate the shared prefix once and reference it from each pathway.
 
 2. **For each pathway:**
-   a. Read the pathway steps from the graph.
-   b. For each step, look up the symbol in the code-reference-index to get exact
+   a. Query the pathway steps from the SQLite database.
+   b. For each step, query the symbol from the `symbols` table to get exact
       file:line range.
    c. Read the source code for that symbol (targeted line range).
    d. Extract dimensional annotations from the source.
@@ -315,46 +322,60 @@ What events are emitted, what jobs are queued, what integrations are called?
 4. **After all pathways are annotated, write a summary** with statistics:
    how many pathways, how many annotations per dimension, how many ambiguities.
 
-## Output Schema
+## Output Format
 
-```json
-{
-  "generated_at": "ISO-8601",
-  "repo": "repo-name",
+### Teammate Output: JSONL
+
+Each teammate writes one annotated pathway per line to its JSONL output file:
+
+```jsonl
+{"pathway_id":"PW-001","entry_point":"EP-001","entry_label":"POST /api/orders","final_outcome":"FO-001","outcome_label":"Order saved to database","dimensions":{"data":{...},"auth":{...},"logic":{...},"ui":{...},"config":{...},"side_effects":{...}}}
+```
+
+### Orchestrator Merges to SQLite
+
+The orchestrator merges JSONL files into the SQLite database:
+
+```sql
+CREATE TABLE pathway_annotations (
+  pathway_id TEXT PRIMARY KEY REFERENCES pathways(id),
+  entry_label TEXT NOT NULL,
+  outcome_label TEXT NOT NULL,
+  dimensions_json TEXT NOT NULL,  -- Full dimensional annotation as JSON
+  ambiguity_count INTEGER DEFAULT 0,
+  annotation_count INTEGER DEFAULT 0
+);
+
+CREATE TABLE annotation_source_maps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pathway_id TEXT NOT NULL REFERENCES pathways(id),
+  dimension TEXT NOT NULL,       -- data, auth, logic, ui, config, side_effects
+  annotation_type TEXT NOT NULL, -- entity_read, validation, rule, error_path, etc.
+  description TEXT,
+  symbol_id TEXT REFERENCES symbols(id),
+  file TEXT NOT NULL,
+  line INTEGER NOT NULL
+);
+
+CREATE INDEX idx_annotations_pathway ON annotation_source_maps(pathway_id);
+CREATE INDEX idx_annotations_symbol ON annotation_source_maps(symbol_id);
+CREATE INDEX idx_annotations_dimension ON annotation_source_maps(dimension);
+```
+
+The `dimensions_json` column contains the full annotation (same structure as the
+per-dimension examples above). The `annotation_source_maps` table provides a queryable
+index of every source map reference, enabling incremental updates: when a symbol changes,
+query `annotation_source_maps` to find affected pathways and re-annotate them.
+
+### Statistics (written to metadata table)
+
+```sql
+INSERT INTO metadata VALUES ('annotation_stats', '{
   "pathways_annotated": 234,
-
-  "annotated_pathways": [
-    {
-      "pathway_id": "PW-001",
-      "entry_point": "EP-001",
-      "entry_label": "POST /api/orders",
-      "final_outcome": "FO-001",
-      "outcome_label": "Order saved to database",
-      "steps": [ ... ],
-      "dimensions": {
-        "data": { ... },
-        "auth": { ... },
-        "logic": { ... },
-        "ui": { ... },
-        "config": { ... },
-        "side_effects": { ... }
-      }
-    }
-  ],
-
-  "statistics": {
-    "pathways_annotated": 234,
-    "total_annotations": 1456,
-    "by_dimension": {
-      "data": 312,
-      "auth": 89,
-      "logic": 456,
-      "ui": 123,
-      "config": 178,
-      "side_effects": 298
-    },
-    "ambiguities": 23,
-    "infrastructure_steps_skipped": 89
+  "total_annotations": 1456,
+  "by_dimension": {"data": 312, "auth": 89, "logic": 456, "ui": 123, "config": 178, "side_effects": 298},
+  "ambiguities": 23,
+  "infrastructure_steps_skipped": 89
   }
 }
 ```

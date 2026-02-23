@@ -29,8 +29,8 @@ consumers. When you can't make the connection, interview the user — don't gues
 You will receive:
 - `repo_path`: Absolute path to the repository
 - `scope`: "full" or comma-separated directories
-- `index_path`: Path to the code-reference-index.json (from code-indexer)
-- `output_path`: Where to write discovered connections
+- `db_path`: Path to the SQLite database (code-reference-index.db from code-indexer)
+- `output_path`: Where to write discovered connections (JSONL intermediate)
 - `languages`: Primary languages in scope
 - `frameworks`: Detected frameworks
 - `connection_hints`: The `connection_hints` array from the code-indexer output
@@ -454,49 +454,58 @@ For each type:
 5. Flag unmatched items for user interview.
 6. **Write to disk after completing each connection type.**
 
-## Output Schema
+## Output Format
 
-```json
-{
-  "generated_at": "ISO-8601",
-  "repo": "repo-name",
-  "total_connections": 156,
-  "connections": [
-    { ... connection entries by type ... }
-  ],
-  "unresolved": [
-    { ... items needing user interview ... }
-  ],
-  "statistics": {
-    "by_type": {
-      "event": 34,
-      "ipc": 12,
-      "pubsub": 8,
-      "db_hook": 15,
-      "reactive": 23,
-      "middleware_chain": 3,
-      "di_binding": 18,
-      "webhook": 6,
-      "convention": 22,
-      "dispatch_table": 5,
-      "file_watcher": 4,
-      "signal": 6
-    },
-    "resolved_from_hints": 14,
-    "unresolved_total": 7
-  }
-}
+### Teammate Output: JSONL
+
+Each teammate writes one JSON object per line to its JSONL output file. Each line is
+one connection record. This is append-only and crash-safe.
+
+```jsonl
+{"connection_type":"event","event_name":"order.created","emitters":[...],"listeners":[...]}
+{"connection_type":"ipc","channel":"update-playlist","senders":[...],"handlers":[...]}
 ```
 
-## Merging with the Code Reference Index
+Unresolved items are written to a separate JSONL file (`{output_path}.unresolved.jsonl`).
 
-After connection hunting is complete, the orchestrator merges connections back into
-the code reference index. Each connection becomes one or more edges in the index:
+### Orchestrator Merges to SQLite
 
-- An event emitter's `calls` array gains entries for each listener
-- A listener's `called_by` array gains the emitter
-- A middleware chain creates ordered `calls` edges between chain members
-- A DI binding links the consumer's `calls` to the concrete implementation
-- An observable's `calls` gains entries for each observer/reaction
+The orchestrator merges all teammate JSONL files into the SQLite database, adding these
+tables to the existing `code-reference-index.db`:
 
-This enriched index is what the graph constructor consumes.
+```sql
+CREATE TABLE connections (
+  id TEXT PRIMARY KEY,           -- CONN-001
+  connection_type TEXT NOT NULL, -- event, ipc, pubsub, db_hook, etc.
+  key_name TEXT,                 -- Event name, channel name, topic name
+  infrastructure TEXT,           -- EventEmitter, Redis, Kafka, etc.
+  details_json TEXT NOT NULL,    -- Full connection record as JSON
+  resolved INTEGER DEFAULT 1    -- 0 for unresolved items
+);
+
+CREATE TABLE unresolved_connections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL,            -- unmatched_emitter, orphan_route, dynamic_dispatch
+  file TEXT,
+  line INTEGER,
+  details_json TEXT NOT NULL,    -- Full record with question for user
+  resolved INTEGER DEFAULT 0,
+  resolution TEXT                -- User's answer, once provided
+);
+
+CREATE INDEX idx_connections_type ON connections(connection_type);
+CREATE INDEX idx_connections_key ON connections(key_name);
+```
+
+The orchestrator also updates the `calls` table in the symbols index to add indirect
+edges:
+
+```sql
+-- For each event connection: emitter calls each listener
+INSERT INTO calls (caller_id, callee_id, callee_name, call_file, call_line, connection_type)
+VALUES ('SYM-emitter', 'SYM-listener', 'handlerName', 'file.ts', 42, 'event');
+```
+
+This enriches the call graph with indirect edges so the graph builder can trace through
+events, IPC, pub/sub, etc. The `connection_type` column distinguishes direct calls from
+indirect connections — the graph builder uses this to identify fan-out points.

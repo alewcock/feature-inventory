@@ -3,6 +3,16 @@
 The graph-based pipeline produces a layered set of artifacts. Each layer builds on the
 previous one, and all layers are designed for incremental updates when source code changes.
 
+## Storage Strategy
+
+The pipeline uses three storage formats, each chosen for its strengths:
+
+| Format | Used For | Why |
+|--------|----------|-----|
+| **SQLite** | Index, connections, graph, annotations | Queryable, incrementally updatable, relational. Agents query specific symbols/pathways instead of loading entire datasets |
+| **JSONL** | Intermediate teammate output | Append-only, crash-safe. Each line is a valid record. Merged into SQLite by orchestrator |
+| **Markdown** | Feature detail files, interview, indexes | Human-readable, agent-readable. The final output consumed by re-implementors |
+
 ## Directory Structure
 
 ```
@@ -13,304 +23,106 @@ docs/features/
 ├── discovery.json                        # Repo scan results (unchanged)
 ├── plan.json                             # Analysis plan (updated for graph pipeline)
 │
-├── index/                                # Layer 1: Code Reference Index
-│   ├── code-reference-index.json         # Every symbol, call site, import, signature
-│   └── code-reference-index-manifest.json # File processing manifest
+├── graph.db                              # SQLite database (Layers 1-4 combined)
+│   ├── [symbols table]                   #   Layer 1: Code Reference Index
+│   ├── [calls table]                     #   Layer 1: Call edges
+│   ├── [imports table]                   #   Layer 1: Import relationships
+│   ├── [file_manifest table]             #   Layer 1: Processing manifest
+│   ├── [connection_hints table]          #   Layer 1: Hints for connection hunter
+│   ├── [connections table]               #   Layer 2: Indirect connections
+│   ├── [unresolved_connections table]    #   Layer 2: Needing user interview
+│   ├── [entry_points table]              #   Layer 3: Graph entry points
+│   ├── [final_outcomes table]            #   Layer 3: Graph outcomes
+│   ├── [pathways table]                  #   Layer 3: Traced pathways
+│   ├── [pathway_steps table]             #   Layer 3: Steps within pathways
+│   ├── [fan_out_points table]            #   Layer 3: Fan-out locations
+│   ├── [infrastructure table]            #   Layer 3: Non-pathway symbols
+│   ├── [graph_validation table]          #   Layer 3: Validation issues
+│   ├── [pathway_annotations table]       #   Layer 4: Dimensional annotations
+│   ├── [annotation_source_maps table]    #   Layer 4: Source map index
+│   └── [metadata table]                  #   Statistics and configuration
 │
-├── connections/                           # Layer 2: Indirect Connections
-│   ├── connections.json                   # All indirect edges (events, IPC, etc.)
-│   └── unresolved-connections.json        # Items needing user interview
+├── intermediate/                          # JSONL teammate output (can be deleted after merge)
+│   ├── index--main.jsonl                  #   Indexer output for src/main scope
+│   ├── index--renderer.jsonl              #   Indexer output for src/renderer scope
+│   ├── connections--events-ipc.jsonl      #   Connection hunter output
+│   ├── annotations--ep001-group.jsonl     #   Annotator output for EP-001 group
+│   └── ...
 │
-├── graph/                                 # Layer 3: Outcome Graph
-│   ├── outcome-graph.json                 # Entry points, final outcomes, pathways
-│   ├── validation-report.json             # Orphans, gaps, coverage stats
-│   └── unresolved-graph.json              # Orphan entry points / unreachable outcomes
-│
-├── annotated/                             # Layer 4: Annotated Pathways
-│   ├── annotated-pathways.json            # Pathways with dimensional annotations
-│   └── annotation-stats.json              # Coverage and ambiguity counts
-│
-├── details/                               # Layer 5: Feature Detail Files (unchanged format)
+├── details/                               # Layer 5: Feature Detail Files (markdown)
 │   ├── F-001.md                           # Major feature
 │   ├── F-001.01.md                        # Sub-feature
 │   ├── F-001.01.01.md                     # Behavior
 │   └── ...
 │
 ├── FEATURE-INDEX.md                       # Master table of contents
-└── FEATURE-INDEX.json                     # Machine-readable index
+└── FEATURE-INDEX.json                     # Machine-readable index (exported from SQLite)
 ```
 
-## Layer 1: Code Reference Index
+## Why SQLite?
 
-### code-reference-index.json
+A 20-year-old codebase can easily produce 50,000+ symbols. At that scale:
 
-The complete mechanical index of every named symbol in the codebase.
+- **JSON is unusable.** A 50MB JSON file can't be loaded into an agent's context window.
+  Agents must query specific symbols, not load everything. SQLite enables
+  `SELECT * FROM symbols WHERE file = 'src/orders.ts'` instead of parsing the whole index.
 
-```json
-{
-  "generated_at": "ISO-8601",
-  "repo": "repo-name",
-  "scope": "full",
-  "languages": ["typescript", "csharp"],
-  "files_indexed": 234,
-  "total_symbols": 1847,
+- **Incremental updates are cheap.** When code changes, UPDATE/INSERT only affected rows.
+  JSON requires rewriting the entire file to change one symbol.
 
-  "symbols": [
-    {
-      "id": "SYM-0001",
-      "type": "function | class | method | route | constant | interface | enum | variable",
-      "name": "calculateShippingCost",
-      "qualified_name": "ShippingService.calculateShippingCost",
-      "file": "src/services/shipping.ts",
-      "line_start": 47,
-      "line_end": 89,
-      "signature": {
-        "params": [{"name": "order", "type": "Order"}, {"name": "dest", "type": "Address"}],
-        "return_type": "ShippingQuote"
-      },
-      "visibility": "public",
-      "is_async": true,
-      "calls": [
-        {"symbol_id": "SYM-0045", "name": "getTaxRate", "line": 52},
-        {"symbol_id": "SYM-0078", "name": "getCarrierRates", "line": 58}
-      ],
-      "called_by": [
-        {"symbol_id": "SYM-0102", "name": "CheckoutController.submit", "file": "src/routes/checkout.ts", "line": 42}
-      ],
-      "exports": ["named"],
-      "caller_count": 3
-    }
-  ],
+- **Relationships are natural.** Calls, connections, pathways, and annotations are
+  relational data. SQLite JOINs express queries like "find all pathways that pass through
+  this symbol" efficiently, without scanning every pathway.
 
-  "imports": [
-    {
-      "file": "src/services/shipping.ts",
-      "line": 1,
-      "source": "./tax",
-      "resolved_file": "src/services/tax.ts",
-      "symbols": ["getTaxRate", "TaxConfig"]
-    }
-  ],
+- **Single file, no server.** SQLite is just a `.db` file. No database installation, no
+  network, no configuration. It ships with Python and most language runtimes.
 
-  "connection_hints": [
-    {
-      "type": "dynamic_call | string_key_dispatch | framework_magic | reflection",
-      "file": "src/plugins/loader.ts",
-      "line": 45,
-      "expression": "plugins[name].init()",
-      "note": "Description of what needs resolution"
-    }
-  ],
+- **Agents can use it directly.** Bash tool runs `sqlite3 graph.db "SELECT ..."` or
+  agents use Python's built-in `sqlite3` module. No special tooling required.
 
-  "file_manifest": [
-    {"file": "src/services/shipping.ts", "lines": 200, "symbols": 12, "status": "done"}
-  ],
+## Layers 1-4: SQLite Database (graph.db)
 
-  "statistics": {
-    "by_type": {"function": 423, "class": 67, "method": 312, "route": 45},
-    "dynamic_calls": 23,
-    "untyped_params": 156
-  }
-}
-```
+All structured data lives in a single SQLite database. See the individual agent specs
+for complete table schemas:
 
-## Layer 2: Indirect Connections
+- **Layer 1 (Code Reference Index):** `code-indexer.md` — tables: `symbols`, `calls`,
+  `imports`, `file_manifest`, `connection_hints`, `metadata`
+- **Layer 2 (Indirect Connections):** `connection-hunter.md` — tables: `connections`,
+  `unresolved_connections` (plus enriched `calls` rows with `connection_type`)
+- **Layer 3 (Outcome Graph):** `graph-builder.md` — tables: `entry_points`,
+  `final_outcomes`, `pathways`, `pathway_steps`, `fan_out_points`, `fan_out_branches`,
+  `infrastructure`, `infrastructure_pathway_refs`, `graph_validation`
+- **Layer 4 (Annotated Pathways):** `pathway-dimension-annotator.md` — tables:
+  `pathway_annotations`, `annotation_source_maps`
 
-### connections.json
+### Key Cross-Layer Queries
 
-Every indirect edge between code that doesn't involve a direct function call.
+```sql
+-- From a changed file, find all affected features:
+-- Step 1: Find symbols in the changed file
+SELECT id FROM symbols WHERE file = 'src/services/order.ts';
 
-```json
-{
-  "generated_at": "ISO-8601",
-  "repo": "repo-name",
-  "total_connections": 156,
+-- Step 2: Find pathways containing those symbols
+SELECT DISTINCT pathway_id FROM pathway_steps WHERE symbol_id IN (
+  SELECT id FROM symbols WHERE file = 'src/services/order.ts'
+);
 
-  "connections": [
-    {
-      "id": "CONN-001",
-      "connection_type": "event | ipc | pubsub | db_hook | reactive | middleware_chain | di_binding | webhook | convention | dispatch_table | file_watcher | signal",
-      "...": "type-specific fields (see connection-hunter.md for schemas)"
-    }
-  ],
+-- Step 3: Find features assigned to those pathways (from FEATURE-INDEX.json)
+-- (Feature→pathway mapping is in the JSON index, not SQLite,
+--  because features are markdown files, not database records)
 
-  "unresolved": [
-    {
-      "type": "unmatched_emitter | orphan_route | dynamic_dispatch",
-      "...": "details with question for user"
-    }
-  ],
+-- Find all entry points that lead to a specific final outcome
+SELECT DISTINCT ep.* FROM entry_points ep
+JOIN pathways p ON p.entry_point_id = ep.id
+WHERE p.final_outcome_id = 'FO-001';
 
-  "statistics": {
-    "by_type": {"event": 34, "ipc": 12, "pubsub": 8},
-    "resolved_from_hints": 14,
-    "unresolved_total": 7
-  }
-}
-```
+-- Get full dimensional annotation for a pathway
+SELECT dimensions_json FROM pathway_annotations WHERE pathway_id = 'PW-001';
 
-## Layer 3: Outcome Graph
-
-### outcome-graph.json
-
-The complete graph of paths from entry points to final outcomes.
-
-```json
-{
-  "generated_at": "ISO-8601",
-  "repo": "repo-name",
-  "product": "product name",
-
-  "entry_points": [
-    {
-      "id": "EP-001",
-      "category": "http_route | cli_command | cron_job | ui_event | message_consumer | webhook | ipc_handler | lifecycle_hook | file_watcher | signal | timer | websocket | db_trigger | observable_source",
-      "label": "POST /api/orders",
-      "symbol": "OrderController.create",
-      "symbol_id": "SYM-0102",
-      "file": "src/routes/orders.ts",
-      "line": 34,
-      "trigger": "User submits order via API",
-      "authentication": "required | optional | none"
-    }
-  ],
-
-  "final_outcomes": [
-    {
-      "id": "FO-001",
-      "category": "data_mutation | http_response | email | sms | push_notification | external_api_call | file_written | queue_published | websocket_sent | cache_mutation | business_log | ui_state_change | process_control",
-      "label": "Order saved to database",
-      "symbol": "OrderRepository.save",
-      "symbol_id": "SYM-0678",
-      "file": "src/repositories/order.ts",
-      "line": 67,
-      "target": "orders table",
-      "operation": "INSERT"
-    }
-  ],
-
-  "pathways": [
-    {
-      "id": "PW-001",
-      "entry_point": "EP-001",
-      "final_outcome": "FO-001",
-      "steps": [
-        {"symbol_id": "SYM-0102", "symbol": "OrderController.create", "file": "src/routes/orders.ts", "line": 34, "type": "entry_point"},
-        {"symbol_id": "SYM-0200", "symbol": "authMiddleware", "file": "src/middleware/auth.ts", "line": 12, "type": "middleware"},
-        {"symbol_id": "SYM-0305", "symbol": "OrderService.processOrder", "file": "src/services/order.ts", "line": 89, "type": "logic"},
-        {"symbol_id": "SYM-0678", "symbol": "OrderRepository.save", "file": "src/repositories/order.ts", "line": 67, "type": "final_outcome"}
-      ],
-      "fan_outs": []
-    }
-  ],
-
-  "fan_out_points": [
-    {
-      "event": "order.created",
-      "location": {"file": "src/services/order.ts", "line": 142, "symbol_id": "SYM-0310"},
-      "branch_count": 4,
-      "pathway_ids": ["PW-002", "PW-003", "PW-004", "PW-005"]
-    }
-  ],
-
-  "infrastructure": [
-    {
-      "symbol_id": "SYM-0900",
-      "symbol": "formatCurrency",
-      "file": "src/utils/format.ts",
-      "line": 5,
-      "caller_count": 23,
-      "on_pathways": ["PW-001", "PW-005", "PW-012"],
-      "classification": "utility"
-    }
-  ],
-
-  "validation": {
-    "entry_points_total": 45,
-    "final_outcomes_total": 89,
-    "pathways_total": 234,
-    "orphan_entry_points": [],
-    "unreachable_outcomes": [],
-    "graph_gaps": [],
-    "coverage": {
-      "symbols_on_pathways": 423,
-      "symbols_as_infrastructure": 156,
-      "symbols_unclassified": 0,
-      "index_coverage_pct": 100.0
-    }
-  },
-
-  "statistics": {
-    "entry_points": 45,
-    "final_outcomes": 89,
-    "pathways": 234,
-    "fan_out_points": 12,
-    "avg_pathway_length": 6.3,
-    "max_pathway_length": 18,
-    "infrastructure_symbols": 156,
-    "dead_code_symbols": 8
-  }
-}
-```
-
-## Layer 4: Annotated Pathways
-
-### annotated-pathways.json
-
-Each pathway annotated with dimensional information from the source code.
-
-```json
-{
-  "generated_at": "ISO-8601",
-  "repo": "repo-name",
-  "pathways_annotated": 234,
-
-  "annotated_pathways": [
-    {
-      "pathway_id": "PW-001",
-      "entry_point": "EP-001",
-      "entry_label": "POST /api/orders",
-      "final_outcome": "FO-001",
-      "outcome_label": "Order saved to database",
-      "steps": ["...from graph..."],
-      "dimensions": {
-        "data": {
-          "entities_read": [],
-          "entities_written": [],
-          "validations": [],
-          "transformations": []
-        },
-        "auth": {
-          "authentication": {},
-          "authorization": [],
-          "tenant_isolation": {}
-        },
-        "logic": {
-          "rules": [],
-          "state_transitions": [],
-          "error_paths": [],
-          "edge_cases": []
-        },
-        "ui": {
-          "entry_ui": {},
-          "outcome_ui": {},
-          "loading_state": {}
-        },
-        "config": {
-          "env_vars": [],
-          "feature_flags": [],
-          "constants": []
-        },
-        "side_effects": {
-          "events_emitted": [],
-          "jobs_queued": [],
-          "external_calls": [],
-          "notifications": []
-        }
-      }
-    }
-  ]
-}
+-- Find all unresolved issues across all layers
+SELECT 'connection' as layer, type, details_json FROM unresolved_connections WHERE resolved = 0
+UNION ALL
+SELECT 'graph' as layer, issue_type, observation FROM graph_validation WHERE resolved = 0;
 ```
 
 ## Layer 5: Feature Detail Files
@@ -356,15 +168,15 @@ When source code changes:
 ```
 1. Changed files identified (git diff)
    ↓
-2. Re-index changed files (update code-reference-index.json)
+2. Re-index changed files (UPDATE/INSERT symbols, calls, imports in graph.db)
    ↓
-3. Re-hunt connections in changed files (update connections.json)
+3. Re-hunt connections in changed files (UPDATE connections in graph.db)
    ↓
 4. Find affected pathways (pathways containing updated symbols)
    ↓
-5. Re-trace affected pathways (update outcome-graph.json)
+5. Re-trace affected pathways (UPDATE pathways, pathway_steps in graph.db)
    ↓
-6. Re-annotate affected pathways (update annotated-pathways.json)
+6. Re-annotate affected pathways (UPDATE pathway_annotations in graph.db)
    ↓
 7. Flag features whose pathways changed (update detail files)
    ↓

@@ -31,20 +31,35 @@ not as constraint.
 ## Input
 
 You will receive:
-- `annotated_pathways_path`: Path to annotated-pathways.json
-- `graph_path`: Path to outcome-graph.json
-- `index_path`: Path to code-reference-index.json
+- `db_path`: Path to the SQLite database (contains all index, connection, graph, and
+  annotation tables)
+- `cluster`: The feature cluster to derive (feature ID, name, assigned pathway IDs)
 - `interview_path`: Path to interview.md (product purpose and domain context)
-- `output_path`: Where to write feature detail files
+- `output_path`: Where to write feature detail files (markdown)
 - `product_context`: Brief summary of what this product does
 - `user_feature_map_path`: Path to user-feature-map.md (user's mental model of features)
+
+Query the database for pathway annotations:
+```sql
+-- Get all annotated pathways for this cluster
+SELECT pa.*, p.entry_point_id, p.final_outcome_id, p.step_count
+FROM pathway_annotations pa
+JOIN pathways p ON pa.pathway_id = p.id
+WHERE pa.pathway_id IN ('PW-001', 'PW-002', ...);
+
+-- Get source maps for a pathway
+SELECT * FROM annotation_source_maps WHERE pathway_id = 'PW-001';
+
+-- Get pathway steps
+SELECT * FROM pathway_steps WHERE pathway_id = 'PW-001' ORDER BY step_order;
+```
 
 ## Context Window Discipline
 
 - **Process ONE feature cluster at a time.** Identify a cluster, derive the feature,
   write all files for it, move on.
-- **Never hold more than ~200 lines of annotation data in context at once.** Read
-  pathway annotations in targeted chunks.
+- **Never hold more than ~200 lines of annotation data in context at once.** Query
+  the SQLite database for specific pathways rather than loading all annotations.
 - **Write each detail file as soon as you finish it.** Don't accumulate.
 - **Use the user's feature map as a starting skeleton**, but let the graph override
   it when the code tells a different story.

@@ -353,7 +353,7 @@ Query the `graph_validation` table for issues:
 
 - **Orphan entry points** → ALWAYS present to user for interview
 - **Unreachable outcomes** → ALWAYS present to user for interview
-- **Graph gaps** → Present to user if likely meaningful (not pure infrastructure)
+- **Graph gaps** → ALWAYS present to user for interview (classify as missing connection, dead code, or infrastructure)
 
 ```
 Outcome Graph — Validation

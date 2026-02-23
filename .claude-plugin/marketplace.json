@@ -1,8 +1,8 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "feature-inventory",
-  "description": "Reverse-engineers every feature across codebases using Agent Teams, then generates implementation-ready plans for your target architecture and marketing catalogs for go-to-market teams",
-  "version": "6.0.0",
+  "description": "Reverse-engineers every feature across codebases using Agent Teams. Builds a code reference index, hunts indirect connections, constructs an outcome graph, and derives features from outcomes — not implementations. Includes graph-based and dimension-based inventory pipelines, gap analysis, plan generation, incremental reindex, and marketing catalogs",
+  "version": "7.0.0",
   "owner": {
     "name": "Control Play",
     "url": "https://github.com/alewcock"
@@ -10,8 +10,8 @@
   "plugins": [
     {
       "name": "feature-inventory",
-      "description": "Reverse-engineers every feature across codebases using Agent Teams for parallel analysis, then generates implementation-ready plans with TDD stubs and self-contained section files. Includes feature inventory, gap analysis, plan generation, and marketing catalog generation for go-to-market teams. REQUIRES Agent Teams enabled.",
-      "version": "6.0.0",
+      "description": "Reverse-engineers every feature across codebases using Agent Teams. Builds a code reference index, hunts indirect connections, constructs an outcome graph, and derives features from outcomes — not implementations. Includes graph-based and dimension-based inventory pipelines, gap analysis, plan generation with TDD stubs, incremental reindex, and marketing catalog generation. REQUIRES Agent Teams enabled.",
+      "version": "7.0.0",
       "author": {
         "name": "Control Play",
         "url": "https://github.com/alewcock"

@@ -218,11 +218,18 @@ The graph pipeline discovers features bottom-up from what the code does:
    - Per-file agents hunt indirect connections (events, IPC, pub/sub, DB triggers, etc.)
    - Interview you to resolve connections that couldn't be traced automatically
    - Enrich call graph with indirect edges
-4. **Build** the outcome graph (entry points → pathways → final outcomes)
-5. **Interview you** about orphan routes and unreachable outcomes (never silently classified as dead code)
-6. **Annotate** each pathway with 6 dimensions (data, auth, logic, UI, config, side effects)
-7. **Derive** features from annotated pathways — named by what users achieve, not how code is structured
-8. **Validate** every pathway claimed by exactly one feature, every entry point in at least one feature
+4. **Build outcome graph** (Phase 2 — delegated to `build-graph`):
+   - Identify entry points and final outcomes
+   - Trace pathways between them
+   - Interview you about orphan routes, unreachable outcomes, graph gaps
+5. **Annotate pathways** (Phase 3 — delegated to `annotate-pathways`):
+   - Annotate each pathway with 6 dimensions (data, auth, logic, UI, config, side effects)
+   - Extract exact values from source code at each step
+6. **Derive features, build index & validate** (Phase 4 — delegated to `derive-features`):
+   - Cluster pathways into feature areas
+   - Derive features named by what users achieve, not how code is structured
+   - Interview you for quality resolution
+   - Validate every pathway claimed by exactly one feature
 
 All structured data (index, connections, graph, annotations) lives in a single SQLite database (`docs/features/graph.db`). Feature detail files are the same markdown format as the dimension pipeline.
 

@@ -178,234 +178,58 @@ construction.
 Preserved files: everything from previous steps, enriched `graph.db`,
 `intermediate/index--*.jsonl`, `intermediate/connections--*.jsonl`
 
-## Step 4: Build Outcome Graph
+## Step 4: Build Outcome Graph (Phase 2)
 
-### 4a: Spawn Graph Builder
+**Delegate to `commands/build-graph.md`.**
 
-The graph builder is a single-agent task (it needs a holistic view of the codebase,
-not a per-module view). Spawn ONE teammate with the
-`feature-inventory:graph-builder` agent.
+This step constructs the outcome graph from the enriched index: identifies entry points
+and final outcomes, traces pathways between them, validates the graph, and interviews
+the user about orphans, unreachable outcomes, and graph gaps.
 
-**The teammate receives:**
-- Path to the SQLite database (`./docs/features/graph.db`)
-- Product context from interview
+Read and follow `commands/build-graph.md`. When it completes, `graph.db` contains the
+full outcome graph — entry points, pathways, final outcomes, fan-out points — ready for
+pathway annotation.
 
-The graph builder adds its tables (`entry_points`, `final_outcomes`, `pathways`,
-`pathway_steps`, `fan_out_points`, `infrastructure`, `graph_validation`) directly to
-`graph.db`. No separate output file needed.
+**Do NOT proceed to Step 5 until `build-graph.md` reports the outcome graph is complete.**
 
-**If the index is very large (>5000 symbols)**, split the graph builder into two phases:
-1. Phase 1 teammate: Identify all entry points and all final outcomes (SQL queries
-   against `symbols` and `connections` tables). INSERT into `entry_points` and
-   `final_outcomes` tables.
-2. Phase 2 teammates: Trace pathways — one per entry point group (by API resource,
-   by UI page, by job scheduler, etc.), batched in groups of 5. Each writes to
-   `pathways` and `pathway_steps` tables.
-
-### 4b: Graph Validation & User Interview
-
-Query the `graph_validation` table for issues:
-
-- **Orphan entry points** → ALWAYS present to user for interview
-- **Unreachable outcomes** → ALWAYS present to user for interview
-- **Graph gaps** → ALWAYS present to user for interview (classify as missing connection, dead code, or infrastructure)
-
-```
-Outcome Graph — Validation
-============================
-Entry points: {N}
-Final outcomes: {N}
-Pathways: {N}
-Fan-out points: {N}
-Index coverage: {pct}%
-
-Issues found: {N}
-  Orphan entry points: {N} — need user input
-  Unreachable outcomes: {N} — need user input
-  Graph gaps: {N} — likely missing connections
-
-{Present each issue with question for user}
-```
-
-After user responses, update the graph (add missing connections, mark dead code,
-re-trace affected pathways).
-
-### Context Checkpoint: After Graph Building
+### Context Checkpoint: After Phase 2
 
 **MANDATORY — CLEAR STRONGLY RECOMMENDED.**
 
 Preserved files: everything from previous steps + graph tables in `graph.db`
 
-## Step 5: Annotate Pathways via Agent Teams
+## Step 5: Annotate Pathways (Phase 3)
 
-### 5a: Spawn Pathway Annotators in Batches
+**Delegate to `commands/annotate-pathways.md`.**
 
-Group pathways by entry point for annotation (pathways from the same entry point share
-early steps). Each teammate gets a set of pathways sharing an entry point group.
+This step annotates every pathway with dimensional information: data, auth, logic, UI,
+config, and side effects — extracted from source code at each pathway step.
 
-1. **Create tasks** for each pathway group.
-2. **Spawn teammates in batches of up to 5.** Assign them the
-   `feature-inventory:pathway-dimension-annotator` agent.
-3. **Each teammate receives:**
-   - Their assigned pathway IDs
-   - Path to the SQLite database (`./docs/features/graph.db`)
-   - Repo path (for reading source code at indexed locations)
-   - Output path for annotated pathways (JSONL intermediate)
-   - This instruction verbatim: **"For each pathway, read the source code at each
-     step (using the index to find exact line ranges) and extract: what data is
-     read/written, what auth is checked, what business logic is applied, what UI is
-     rendered, what config is consumed, what side effects are triggered. Every
-     annotation must have a source_map reference. Capture exact values: error messages
-     verbatim, constant values exact, validation rules precise."**
-4. **Batch-level hard stop (every 2 batches).**
+Read and follow `commands/annotate-pathways.md`. When it completes, `graph.db` contains
+dimensional annotations on every pathway — ready for feature derivation.
 
-### 5b: Merge Annotated Pathways
+**Do NOT proceed to Step 6 until `annotate-pathways.md` reports annotation is complete.**
 
-After all annotators complete:
-1. Parse each annotation JSONL split file.
-2. INSERT into the `pathway_annotations` and `annotation_source_maps` tables in `graph.db`.
-3. Write annotation statistics to the `metadata` table.
-
-Present summary:
-```
-Pathway Annotation — Complete
-===============================
-Pathways annotated: {N}
-Total annotations: {N}
-  Data: {N}  Auth: {N}  Logic: {N}  UI: {N}  Config: {N}  Side Effects: {N}
-Ambiguities flagged: {N}
-```
-
-### Context Checkpoint: After Annotation
+### Context Checkpoint: After Phase 3
 
 **MANDATORY — CLEAR STRONGLY RECOMMENDED.**
 
 Preserved files: everything from previous steps + annotations merged in `graph.db`
 
-## Step 6: Derive Features via Agent Teams
+## Step 6: Derive Features, Build Index & Validate (Phase 4)
 
-### 6a: Initial Clustering (Orchestrator — lightweight)
+**Delegate to `commands/derive-features.md`.**
 
-Before spawning feature derivation teammates, the orchestrator does a quick clustering
-pass to assign pathways to major feature areas:
+This step clusters pathways into feature areas, spawns feature derivation agents,
+interviews the user for quality resolution, builds the feature index, and validates
+full coverage.
 
-1. Read `user-feature-map.md` for the user's mental model.
-2. Read the graph's entry points and final outcomes (summary, not full pathways).
-3. Group entry points by API resource, UI page, job type, etc.
-4. Map groups to the user's feature areas.
-5. Identify unclaimed pathways → new feature areas or cross-cutting concerns.
-6. Write initial clustering to `./docs/features/feature-clustering.json`:
+Read and follow `commands/derive-features.md`. When it completes, the full feature
+inventory exists: detail files (`F-*.md`), navigable index (`FEATURE-INDEX.md`),
+and machine-readable index (`FEATURE-INDEX.json`).
 
-```json
-{
-  "clusters": [
-    {
-      "feature_id": "F-001",
-      "feature_name": "Order Management",
-      "pathway_ids": ["PW-001", "PW-002", "PW-003", ...],
-      "entry_point_ids": ["EP-001", "EP-010", "EP-015"],
-      "source": "user_feature_map + graph entry points"
-    }
-  ],
-  "unclaimed_pathways": ["PW-089", "PW-090"],
-  "cross_cutting": ["PW-200", "PW-201"]
-}
-```
-
-### 6b: Spawn Feature Derivation Teammates in Batches
-
-For each cluster:
-
-1. **Create tasks** for each major feature area.
-2. **Spawn teammates in batches of up to 5.** Each teammate gets ONE major feature area.
-   Assign them the `feature-inventory:feature-deriver` agent.
-3. **Each teammate receives:**
-   - Their assigned cluster (feature ID, name, pathway IDs)
-   - Path to the SQLite database (`./docs/features/graph.db`)
-   - Path to interview.md and user-feature-map.md
-   - Output path: `./docs/features/details/`
-   - This instruction verbatim: **"Derive features from outcomes, not implementations.
-     Each pathway traces what the system DOES — cluster related pathways into
-     sub-features, name each by what users ACHIEVE, describe the outcome not the
-     mechanism. Every behavior file needs source maps back to the code index so
-     re-implementors can reference the legacy approach without being constrained by it.
-     A feature description should tell a developer what to build. Source maps tell
-     them how it was built before."**
-4. **Batch-level hard stop (every 2 batches).**
-
-### 6c: User Resolution Interview
-
-After all feature derivation teammates complete, scan detail files for quality issues
-using the same criteria as the standard pipeline's Step 4.5:
-- Thin specs
-- Overlapping features
-- Unresolved ambiguities
-- Orphan behaviors
-
-Present candidates to the user and apply resolutions (define, merge, remove, clarify).
-See the standard pipeline's Step 4.5b-e for the full interview protocol.
-
-Save resolutions to `./docs/features/clarifications-features.md`.
-
-### Context Checkpoint: After Feature Derivation
-
-**MANDATORY — CLEAR STRONGLY RECOMMENDED.**
-
-## Step 7: Build Index
-
-**Identical to the standard pipeline's Step 4c.** Enumerate all detail files, build
-the hierarchy, write FEATURE-INDEX.md and FEATURE-INDEX.json.
-
-The JSON index includes additional graph metadata: pathway references, entry point IDs,
-final outcome IDs, and source map symbol IDs. See `references/graph-output-format.md`.
-
-## Step 8: Validation & Summary
-
-1. **Graph coverage check:** Every pathway must appear in exactly one feature.
-   Report any unclaimed or duplicate-claimed pathways.
-
-2. **Entry point coverage:** Every entry point must appear in at least one feature.
-
-3. **Final outcome coverage:** Every final outcome must appear in at least one behavior.
-
-4. **Cross-check against user's feature map.** Every user-mentioned feature should appear.
-
-5. **Index integrity:** Every source map reference should resolve to a valid symbol in
-   the code reference index.
-
-6. **Present summary:**
-```
-Feature Inventory (Graph Pipeline) — Complete
-===============================================
-Code Reference Index: {N} symbols across {N} files
-Indirect Connections: {N} found ({N} resolved from user interview)
-Outcome Graph: {N} entry points → {N} pathways → {N} final outcomes
-Fan-out points: {N}
-Infrastructure symbols: {N}
-Dead code identified: {N} symbols
-
-Features derived:
-  Major features: {N}
-  Sub-features: {N}
-  Behaviors: {N}
-
-Coverage:
-  Pathways claimed by features: {N}/{N} ({pct}%)
-  Entry points in features: {N}/{N} ({pct}%)
-  Final outcomes in behaviors: {N}/{N} ({pct}%)
-  Index symbols on pathways: {N}/{N} ({pct}%)
-
-Ambiguities: {N} resolved, {N} unresolved
-
-Output files:
-  SQLite database: docs/features/graph.db
-    (index, connections, graph, annotations — all queryable)
-  Feature details: docs/features/details/F-*.md
-  Feature index: docs/features/FEATURE-INDEX.md
-  Feature index (JSON): docs/features/FEATURE-INDEX.json
-```
-
-7. **Ask the user** to review the index and flag anything missing or miscategorized.
+**This is the final phase. When `derive-features.md` reports completion, the pipeline
+is done.**
 
 ## Resume Behavior
 
@@ -421,7 +245,7 @@ rm -f ./docs/features/FEATURE-INDEX.json
 ```
 
 **Do NOT clear:**
-- `.progress.json` — resume state (cleared only after Step 8 completes)
+- `.progress.json` — resume state (cleared only after Step 6 completes)
 - `graph.db` — the SQLite database (index, connections, graph, annotations). This is
   the most expensive artifact. Incremental steps update it in place.
 - `intermediate/` — JSONL teammate output (can be deleted after merge into SQLite,
@@ -437,16 +261,15 @@ Resume rules:
 - Step 3 (Phase 1 — enriched index): Delegates to `build-index.md` which tracks its
   own progress in the `indexing` and `connection_hunting` sections of `.progress.json`.
   See `build-index.md` for detailed resume rules.
-- Step 4 (graph): Re-run if enriched index changed. Graph building is relatively
-  cheap compared to indexing and connection hunting.
-- Step 4b (validation interview): Re-run for new validation failures only.
-- Step 5 (annotation): Use `.progress.json` to skip completed pathway groups.
-  Resume from exact batch. Re-run for pathways that changed in graph re-building.
-- Step 6 (feature derivation): Use `.progress.json` to skip completed feature areas.
-  Re-run for features whose pathways changed.
-- Step 6c (user resolution): Skip if `clarifications-features.md` exists. Re-run for
-  affected features if derivation re-ran.
-- Step 7-8: Always re-run (indexes were cleared).
+- Step 4 (Phase 2 — outcome graph): Delegates to `build-graph.md` which tracks its
+  own progress in the `graph_building` section of `.progress.json`.
+  See `build-graph.md` for detailed resume rules.
+- Step 5 (Phase 3 — annotation): Delegates to `annotate-pathways.md` which tracks its
+  own progress in the `annotation` section of `.progress.json`.
+  See `annotate-pathways.md` for detailed resume rules.
+- Step 6 (Phase 4 — derivation + index + validation): Delegates to `derive-features.md`
+  which tracks its own progress in the `feature_derivation` section of `.progress.json`.
+  See `derive-features.md` for detailed resume rules.
 
 ## Progress File Schema
 
@@ -454,7 +277,7 @@ Resume rules:
 {
   "command": "create-graph",
   "current_step": "5",
-  "current_substep": "5a",
+  "current_substep": "annotate",
   "batch_number": 2,
   "batches_total": 4,
 

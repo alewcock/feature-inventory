@@ -1188,7 +1188,11 @@ Then apply these resume rules:
 - Step 4a: Always re-run (synthesis-plan.json was cleared).
 - Step 4b: Use `.progress.json` to determine which feature areas need create vs verify
   mode. Fall back to scanning detail files if no progress file exists.
-- Step 4.5: Skip if `clarifications-features.md` exists — resolutions are already
-  applied to detail files. If detail files were regenerated (4b ran in create mode
-  for any feature), re-run 4.5 for those features only.
+- Step 4.5a (purpose audit): Always re-run (purpose-audit-*.md files were cleared).
+  The purpose audit is cheap relative to synthesis and catches collapsed/missing
+  purpose-level behaviors that the synthesizer may have missed.
+- Step 4.5b-e (user resolution): Skip if `clarifications-features.md` exists —
+  resolutions are already applied to detail files. If detail files were regenerated
+  (4b ran in create mode for any feature) or the purpose audit created new behaviors,
+  re-run user resolution for affected features only.
 - Step 4c: Always re-run (indexes were cleared).

@@ -202,9 +202,9 @@ If it's unavailable, install individual grammar packages:
 pip install tree-sitter tree-sitter-python tree-sitter-javascript tree-sitter-typescript
 ```
 
-If tree-sitter cannot be installed (restricted environment), fall back to LLM-based
-extraction using the patterns in "Language-Specific Extraction Patterns" below.
-This fallback is slower, less reliable, and burns context — always prefer tree-sitter.
+If tree-sitter cannot be installed or imported, **fail the task and report a blocked
+prerequisite**. For the graph pipeline, do **not** fall back to manual/LLM extraction,
+because Phase 1 requires deterministic tree-sitter indexing.
 
 ### AST Node Types by Language
 
@@ -294,8 +294,9 @@ These are flagged as `connection_hints` for the connection hunter.
 > the extraction script. See "AST Node Types by Language" above for the tree-sitter
 > equivalents.
 >
-> **Without tree-sitter (fallback):** Use these patterns with Grep to find symbol
-> locations, then Read targeted line ranges to extract detail.
+> **Pattern reference only:** The lists below are useful to understand what should be
+> captured, but graph-pipeline Phase 1 execution still requires tree-sitter and must
+> not switch to manual Grep/Read extraction.
 
 ### JavaScript / TypeScript
 - **Functions:** `function name(`, `const name = (`, `const name = function(`,
@@ -474,7 +475,7 @@ For JavaScript, Python, Ruby, and other dynamic languages:
    ```bash
    pip install tree-sitter-languages
    ```
-   If installation fails, fall back to LLM-based extraction (see "Fallback" below).
+   If installation fails, stop and report the missing prerequisite to the orchestrator.
 
 2. **Build file manifest.** Glob for all source files in scope, excluding
    vendor/node_modules/generated directories. Write the manifest. Map each file
@@ -522,18 +523,15 @@ For JavaScript, Python, Ruby, and other dynamic languages:
 6. **Write the final output.** If `db_path` is provided, insert into the SQLite database
    (the orchestrator handles DB creation). Otherwise, write JSONL to `output_path`.
 
-### Fallback: LLM-Based Extraction
+### No Fallback for Graph Pipeline Phase 1
 
-If tree-sitter cannot be installed, fall back to manual extraction using the patterns
-in "Language-Specific Extraction Patterns":
+If tree-sitter cannot be installed/imported, do not continue indexing. Emit a blocked
+status with the exact failing install/import command and stop so the orchestrator can
+surface a prerequisite error to the user.
 
-1. For each file: Grep for definition patterns to find symbol locations.
-2. Read targeted line ranges to extract signatures and call sites.
-3. Write JSONL output incrementally.
-
-This fallback is **significantly slower**, **less reliable** (regex can't parse
-nested structures), and **burns context window** reading every source file. Use it
-only when tree-sitter is genuinely unavailable.
+Rationale: Phase 1 in the graph pipeline depends on deterministic AST extraction. A
+manual/regex fallback produces incomplete and non-reproducible indexes that break graph
+construction quality guarantees.
 
 ## Storage Format
 

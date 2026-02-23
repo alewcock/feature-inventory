@@ -14,9 +14,17 @@ description: >
 
 ## Purpose
 
-This command handles all of Phase 1: mechanical indexing + connection hunting. When it
-completes, `graph.db` contains the **enriched call graph** — every symbol, every direct
-call, and every indirect connection — ready for the graph builder to consume in Phase 2.
+This command handles all of Phase 1 as two explicit steps:
+
+1. **Mechanical Indexing (tree-sitter only):** fast, deterministic extraction of symbols,
+   direct calls, imports, exports, and connection hints.
+2. **Connection Hunting (agent teams):** one file per agent; each agent hunts unresolved
+   indirect connections **in OR out of that file**, writes each finding incrementally,
+   reports, and terminates.
+
+When it completes, `graph.db` contains the **enriched code index** (mechanical + hunted
+connections) and the resulting enriched call graph — ready for the graph builder in
+Phase 2.
 
 The `create-graph` orchestrator delegates to this command. It should not be run directly
 by users.
@@ -29,6 +37,18 @@ Receives from the calling orchestrator:
 - `repo_path`: Absolute path to the repository
 - `discovery.json`: Repo structure and tech stack
 - `product_context`: Brief summary from interview
+
+## Preflight Gate: Tree-Sitter Required
+
+Before spawning indexing teammates, run a preflight check and **fail fast** if the
+runtime cannot import tree-sitter:
+
+```bash
+python3 -c "import tree_sitter, tree_sitter_languages; print('tree-sitter: ready')"
+```
+
+If this command fails, stop Phase 1 and report that tree-sitter is a hard prerequisite
+for graph-pipeline mechanical indexing. Do not proceed with regex/manual extraction.
 
 ## Step 1: Build Code Reference Index via Agent Teams
 
@@ -43,6 +63,8 @@ For each indexing split in the plan:
 1. **Check for existing output:** If the split's output file exists and is non-empty, skip.
 2. **Create tasks** via `TaskCreate` for each pending split.
 3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE scope for ONE repo.
+   Tree-sitter extraction is mandatory; teammates must fail the task if tree-sitter is
+   unavailable rather than switching to manual extraction.
    Assign them the `feature-inventory:code-indexer` agent.
 4. **Each teammate receives** via its task description:
    - The repo path, scope, and output path from the plan
@@ -116,6 +138,44 @@ Connection hints (for hunter): {N}
 Preserved files: `interview.md`, `user-feature-map.md`, `discovery.json`, `plan.json`,
 `graph.db`, `intermediate/index--*.jsonl`
 
+### Phase 1 Output Contract (for Phase 2)
+
+Treat the Phase 1 output as a single **code-index layer** stored in `graph.db`, built from:
+- Mechanical indexing tables: `symbols`, `calls`, `imports`, `file_manifest`, `connection_hints`
+- Connection-hunting tables: indirect connection records + resolution metadata
+
+Phase 2 (`build-graph`) should query this code-index layer in `graph.db` as its source of
+truth, rather than re-reading raw source files for discovery work already completed in
+Phase 1.
+
+Recommended: define a canonical view for unified edge traversal before Phase 2:
+
+```sql
+CREATE VIEW IF NOT EXISTS code_index_edges AS
+SELECT
+  'direct_call' AS edge_type,
+  c.caller_id AS source_symbol_id,
+  c.callee_id AS target_symbol_id,
+  c.callee_name AS key_name,
+  c.call_file AS source_file,
+  c.call_line AS source_line
+FROM calls c
+WHERE COALESCE(c.connection_type, 'direct_call') = 'direct_call'
+UNION ALL
+SELECT
+  cn.connection_type AS edge_type,
+  cn.source_symbol_id,
+  cn.target_symbol_id,
+  cn.key_name,
+  cn.source_file,
+  cn.source_line
+FROM connections_normalized cn;
+```
+
+The exact normalized-connection table name may vary by implementation (`connections` with
+`details_json` or a denormalized helper table), but the contract is stable: Phase 2 reads
+**one unified code-index edge layer** from SQLite.
+
 ## Step 2: Hunt Indirect Connections via Agent Teams
 
 ### 2a: Determine Connection Hunting File Assignments
@@ -169,11 +229,13 @@ For each file in the connection hunting list:
    - The `connection_hints` for this file only
    - Output path for their findings
    - This instruction verbatim: **"Hunt every indirect connection in or out of your
-     assigned file. For each connection pattern you find (event emit, IPC send,
-     pub/sub publish, etc.), Grep the codebase for its counterpart. Document each
-     connection as you find it. When you can't find a match, write it as unresolved
-     with a specific question for the user. When you're done with your file, write
-     a summary line and terminate."**
+     assigned file. Cover ALL 11 connection types: events, IPC, pub/sub, observables,
+     DB triggers/hooks, middleware chains, DI bindings, convention routing,
+     dispatch tables, webhooks, and file watchers. For each connection pattern you
+     find, Grep the codebase for its counterpart. Document each connection as you
+     find it. When you can't find a match, write it as unresolved with a specific
+     question for the user. When you're done with your file, write a summary line
+     and terminate."**
 5. **Monitor agent liveness** using the heartbeat protocol (see
    `references/context-management.md`). Do NOT assume an agent is dead unless its
    output file has not been modified for 5+ minutes.

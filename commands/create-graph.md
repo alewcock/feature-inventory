@@ -38,13 +38,27 @@ description: >
 ---
 
 You are the orchestrator for a graph-based product reverse-engineering effort. Unlike the
-dimension-analysis approach, this pipeline discovers features BOTTOM-UP:
+dimension-analysis approach, this pipeline discovers features BOTTOM-UP.
 
-1. **Index** every symbol in the codebase (mechanical, exhaustive)
-2. **Hunt** for every indirect connection (events, IPC, pub/sub, reactive chains, etc.)
-3. **Build** the outcome graph (entry points → pathways → final outcomes)
-4. **Annotate** each pathway with dimensional information (data, auth, logic, UI, config, side effects)
-5. **Derive** features from annotated pathways (cluster, name, describe, link)
+## Graph Pipeline Phase Mapping
+
+This command executes the graph pipeline phases as follows:
+
+- **Phase 1: Discovery + Index** = Steps 1-3 (discovery, planning, enriched indexing)
+- **Phase 2: Graph Construction** = Step 4
+- **Phase 3: Pathway Annotation** = Step 5
+- **Phase 4: Feature Derivation** = Step 6
+
+Step 0 (user interview) is a prerequisite input-gathering step used by all phases.
+
+Pipeline flow:
+
+1. **Discover and plan** repositories, modules, and teammate splits
+2. **Index** every symbol in the codebase (mechanical, exhaustive)
+3. **Hunt** for every indirect connection (events, IPC, pub/sub, reactive chains, etc.)
+4. **Build** the outcome graph (entry points → pathways → final outcomes)
+5. **Annotate** each pathway with dimensional information (data, auth, logic, UI, config, side effects)
+6. **Derive** features from annotated pathways (cluster, name, describe, link)
 
 The result is the same feature hierarchy (F-001.md, F-001.01.md, F-001.01.01.md) but
 discovered from what the code DOES (outcomes) rather than how it's structured (dimensions).
@@ -75,7 +89,7 @@ Save answers to `./docs/features/interview.md` and the user-provided feature map
 
 **MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
 
-## Step 1: Discovery
+## Step 1: Discovery (Phase 1)
 
 **Identical to the standard pipeline.** Scan the codebase to identify repositories,
 languages, frameworks, size, module structure, and vendor/generated code patterns.
@@ -86,7 +100,7 @@ Write discovery results to `./docs/features/discovery.json`.
 
 **MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
 
-## Step 2: Plan
+## Step 2: Plan (Phase 1)
 
 Based on discovery AND the user interview, create an analysis plan tailored for the
 graph pipeline. The plan determines how to split the indexing and connection-hunting
@@ -165,9 +179,16 @@ This step produces the enriched code reference index: every symbol indexed via
 tree-sitter, every indirect connection hunted per-file, user interview for unresolved
 connections, and the call graph enriched with indirect edges.
 
+**Tree-sitter is REQUIRED for Phase 1 mechanical indexing.** Do not run Phase 1 with
+regex/manual extraction fallbacks. If tree-sitter tooling or grammars are unavailable,
+stop and report the prerequisite failure instead of continuing with degraded indexing.
+
+**Together, Steps 1-3 complete Graph Pipeline Phase 1 (Discovery + Index).**
+
 Read and follow `commands/build-index.md`. When it completes, `graph.db` contains the
-full enriched call graph — direct calls AND indirect connections — ready for graph
-construction.
+Phase 1 **code-index layer** (mechanical tree-sitter indexing + per-file hunted indirect
+connections) and the full enriched call graph — direct calls AND indirect connections —
+ready for graph construction.
 
 **Do NOT proceed to Step 4 until `build-index.md` reports the enriched index is complete.**
 
@@ -182,9 +203,9 @@ Preserved files: everything from previous steps, enriched `graph.db`,
 
 **Delegate to `commands/build-graph.md`.**
 
-This step constructs the outcome graph from the enriched index: identifies entry points
-and final outcomes, traces pathways between them, validates the graph, and interviews
-the user about orphans, unreachable outcomes, and graph gaps.
+This step constructs the outcome graph from the enriched index in `graph.db`: identifies
+entry points and final outcomes, traces pathways between them, validates the graph, and
+interviews the user about orphans, unreachable outcomes, and graph gaps.
 
 Read and follow `commands/build-graph.md`. When it completes, `graph.db` contains the
 full outcome graph — entry points, pathways, final outcomes, fan-out points — ready for

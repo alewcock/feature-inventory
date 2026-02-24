@@ -613,7 +613,8 @@ CREATE TABLE file_manifest (
 
 CREATE TABLE connection_hints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL,           -- dynamic_call, string_key_dispatch, framework_magic, reflection
+  type TEXT NOT NULL,           -- dynamic_call, string_key_dispatch, framework_magic, reflection,
+                                -- data_store_access, dead_end, dead_start
   file TEXT NOT NULL,
   line INTEGER NOT NULL,
   expression TEXT,

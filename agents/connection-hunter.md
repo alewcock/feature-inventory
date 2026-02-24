@@ -404,7 +404,65 @@ For each convention-based connection:
 }
 ```
 
-### 11. String-Keyed Dispatch Tables
+### 11. Shared State via Data Store (Redis, Cache, KV)
+
+**The pattern:** Code writes state to a keyed data store (Redis, Memcached, DynamoDB,
+S3, or an in-memory cache); other code reads from the same key. The data store is the
+shared node — like a database table, but with no schema file to index. The key pattern
+is only visible in the application code.
+
+**Why this matters:** Without this connection type, the graph has two disconnected
+subgraphs (writers and readers) that meet at the data store but have no edge between
+them. This is the same pattern as two SQL queries on the same table, but for key-value
+stores that have no schema to index separately.
+
+**Detection strategy:**
+1. Look for `data_store_access` connection hints from the code-indexer. These flag
+   Redis/cache/KV client calls with extracted key patterns.
+2. If no hints exist, look for repository/cache classes with paired Get*/Set* methods:
+   - StackExchange.Redis: `StringGetAsync`, `StringSetAsync`, `HashGetAsync`,
+     `HashSetAsync`, `StreamAddAsync`, `ListRangeAsync`, `SortedSetRangeByScoreAsync`
+   - ioredis / node-redis: `get`, `set`, `hget`, `hset`, `lpush`, `rpop`, `xadd`, `xread`
+   - AWS SDK: `GetItem`, `PutItem`, `UpdateItem` (DynamoDB), `GetObject`, `PutObject` (S3)
+   - Memcached: `get`, `set`, `add`, `replace`, `delete`
+   - Generic cache: `GetAsync`/`SetAsync`, `Get`/`Put`, `Read`/`Write` on a cache/store class
+3. **Extract the key pattern** from each call. Keys are typically string interpolations
+   like `$"device-status:{playerId}"` or `f"user:{user_id}:profile"`. Record the pattern
+   with placeholders (e.g., `device-status:{playerId}`).
+4. **Match readers to writers by key pattern.** Same key pattern = shared state connection.
+5. **Trace callers.** The connection is between the *callers* of the Get/Set methods,
+   not the repository methods themselves. E.g., `PlayerPollController` (calls GetDeviceStatus)
+   is connected to `PlayerDeviceStatusController` (calls SetDeviceStatus) through the
+   shared key `device-status:{playerId}`.
+
+```json
+{
+  "connection_type": "shared_state",
+  "key_pattern": "device-status:{playerId}",
+  "infrastructure": "Redis (StackExchange.Redis via RedisElasticacheRepository)",
+  "data_type": "string (JSON-serialized DeviceStatus)",
+  "writers": [
+    {"file": "Controllers/Realtime/PlayerDeviceStatusController.cs", "line": 41,
+     "symbol": "PostDeviceStatus", "via": "RedisElasticacheRepository.SetDeviceStatusAsync"}
+  ],
+  "readers": [
+    {"file": "Controllers/Realtime/PlayerPollController.cs", "line": 113,
+     "symbol": "Poll", "via": "RedisElasticacheRepository.GetDeviceStatusAsync"}
+  ],
+  "key_source": {"file": "Repositories/RedisElasticacheRepository.cs", "line": 25,
+                  "note": "Key constructed as string interpolation"}
+}
+```
+
+**Multiple readers/writers are common.** A single key may be written by one controller
+and read by several others (e.g., the Poll controller reads ALL keys). Record every
+reader-writer pair.
+
+**Also check for:** TTL/expiry settings, pub/sub notifications on key changes
+(Redis keyspace notifications, `SUBSCRIBE __keyevent@*`), and atomic operations
+(`INCR`, `DECR`, compare-and-swap) which indicate concurrent access patterns.
+
+### 12. String-Keyed Dispatch Tables
 
 **The pattern:** A map/dictionary maps string keys to handler functions. The key
 comes from external input (event type, command name, action type).
@@ -579,13 +637,14 @@ When your file contains multiple connection patterns, process them in this order
 2. **IPC channels** — critical for multi-process architectures
 3. **Pub/sub topics** — cross-service connections
 4. **DB triggers & ORM hooks** — hidden side effects on data mutation
-5. **Observable/reactive chains** — UI state propagation
-6. **Middleware chains** — request processing order
-7. **DI bindings** — implementation resolution
-8. **Webhook routing** — external service integration
-9. **Convention-based routing** — framework-specific implicit wiring
-10. **String-keyed dispatch** — internal routing tables
-11. **File watchers & signals** — system-level triggers
+5. **Shared state via data store** — Redis/cache/KV read-write pairs through shared keys
+6. **Observable/reactive chains** — UI state propagation
+7. **Middleware chains** — request processing order
+8. **DI bindings** — implementation resolution
+9. **Webhook routing** — external service integration
+10. **Convention-based routing** — framework-specific implicit wiring
+11. **String-keyed dispatch** — internal routing tables
+12. **File watchers & signals** — system-level triggers
 
 ## Output Format
 

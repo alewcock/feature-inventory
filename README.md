@@ -1,10 +1,12 @@
 # feature-inventory
 
-**v11.0.0**
+**v12.0.0**
 
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Builds a code reference index, hunts for every indirect connection (events, IPC, pub/sub, reactive chains), constructs an outcome graph, and derives features from what the code ACHIEVES — not how it's structured. Features describe outcomes, freeing re-implementors to build optimally without replicating legacy architecture.
 
 Also transforms the inventory into fully decomposed, implementation-ready plans for your target architecture and marketing-ready product catalogs for go-to-market teams.
+
+New in v12: **graph-derived connection hunting** — after tree-sitter indexing and cross-referencing, the build-index orchestrator now generates dead_end hints (every call with NULL callee_id) and dead_start hints (every symbol with zero callers) as connection_hints rows. These are the largest and most important hint set — pure graph analysis that catches every gap regardless of framework or IPC mechanism. Connection hunters resolve each one: runtime APIs, external libraries, cross-boundary calls, entry points, public APIs, and dead code. Hunters now interview users directly via AskUserQuestion with an iterate-to-resolution loop (Ask → Act → Follow up → Repeat) instead of flagging for the orchestrator. Phase 1 completion gate requires zero unresolved dead_end/dead_start hints before Phase 2. Resume behavior now queries graph.db directly instead of .progress.json.
 
 New in v11: **architecture consolidation** — removed the old dimension-based pipeline and its 11 exclusive agents. The graph pipeline is now the only `create` command (renamed from `create-graph`). Phase orchestrators (build-index, build-graph, annotate-pathways, derive-features) are now self-contained agents spawnable via Task, eliminating the fragile thin-wrapper indirection that broke Task agent spawning. Fixed agent/command name collisions. Plugin reduced from 26 agents to 13.
 

@@ -94,7 +94,37 @@ After all indexing teammates complete:
      and update `callee_id`. Update `caller_count` on each symbol.
    - Resolve imports: match `imports.source` to `symbols.file` for within-project imports.
    - Reconcile duplicate references across splits (same symbol indexed from different scopes).
-4. **Verify counts:** `SELECT COUNT(*) FROM symbols`, `SELECT COUNT(*) FROM calls`, etc.
+4. **Generate graph-derived connection hints** from the cross-referenced data. These
+   are the most important hints — they identify every gap in the call graph that
+   tree-sitter's 4 syntactic patterns miss, using pure graph analysis:
+   ```sql
+   -- Dead ends: calls where callee_id could not be resolved to any symbol.
+   -- Every NULL callee_id is a gap — the call goes somewhere tree-sitter can't see.
+   -- NO FILTERING. console.log → Browser Console. .forEach(cb) → callback target.
+   -- Connection hunters resolve each one.
+   INSERT INTO connection_hints (type, file, line, expression, note, resolved)
+   SELECT 'dead_end', c.call_file, c.call_line, c.callee_name,
+          'Unresolved call to ' || c.callee_name
+            || ' from ' || COALESCE(s.qualified_name, s.name, 'unknown'),
+          0
+   FROM calls c
+   LEFT JOIN symbols s ON c.caller_id = s.id
+   WHERE c.callee_id IS NULL;
+
+   -- Dead starts: symbols that are never called by anything in the indexed codebase.
+   -- Every zero-caller symbol is either dead code (valid finding) or called through
+   -- an indirect mechanism the indexer missed (a missing connection to find).
+   -- NO FILTERING. Connection hunters resolve each one.
+   INSERT INTO connection_hints (type, file, line, expression, note, resolved)
+   SELECT 'dead_start', s.file, s.line_start, s.name,
+          'Never called: ' || s.type || ' ' || COALESCE(s.qualified_name, s.name),
+          0
+   FROM symbols s
+   WHERE s.caller_count = 0;
+   ```
+5. **Verify counts:** `SELECT COUNT(*) FROM symbols`, `SELECT COUNT(*) FROM calls`,
+   `SELECT COUNT(*) FROM connection_hints WHERE type = 'dead_end'`,
+   `SELECT COUNT(*) FROM connection_hints WHERE type = 'dead_start'`, etc.
 
 **This merge can be done by the orchestrator** using Python's built-in `sqlite3` module
 via the Bash tool:
@@ -126,7 +156,8 @@ Symbols found: {N}
   Constants: {N}  Types: {N}  Variables: {N}
 Imports: {N}
 Connection hints (for hunter): {N}
-  Dynamic calls: {N}  Framework magic: {N}  Reflection: {N}
+  Syntactic:   Dynamic calls: {N}  Framework magic: {N}  Reflection: {N}
+  Graph-derived: Dead ends: {N}  Dead starts: {N}
 ```
 
 ### Context Checkpoint: After Indexing
@@ -258,10 +289,39 @@ For each file in the connection hunting list:
 build-index returns one of:
 - `INDEXING_COMPLETE` — mechanical indexing done, ready for connection hunting
 - `HUNTING_BATCH_DONE` — processed all assigned files, more files may exist
-- `ENRICHED_INDEX_COMPLETE` — all files hunted, merge done, ready for Phase 2
+- `ENRICHED_INDEX_COMPLETE` — all hints resolved, merge done, ready for Phase 2
 
 When `assigned_files` was provided, return `HUNTING_BATCH_DONE` after processing all
 assigned files. The calling orchestrator tracks overall completion.
+
+### Phase 1 Completion Gate
+
+**Phase 1 does NOT pass while unresolved dead_end or dead_start hints remain.**
+Query `graph.db` to check:
+
+```sql
+SELECT type, COUNT(*) as remaining
+FROM connection_hints
+WHERE resolved = 0 AND type IN ('dead_end', 'dead_start')
+GROUP BY type;
+```
+
+If this returns any rows, Phase 1 is incomplete. The orchestrator must:
+1. Identify which files still have unresolved hints:
+   ```sql
+   SELECT DISTINCT file, COUNT(*) as unresolved_count
+   FROM connection_hints
+   WHERE resolved = 0 AND type IN ('dead_end', 'dead_start')
+   GROUP BY file
+   ORDER BY unresolved_count DESC;
+   ```
+2. Re-spawn connection hunters for those files (they will interview the user
+   directly via `AskUserQuestion` to iterate to resolution).
+3. After hunters complete, re-check the gate.
+
+Only return `ENRICHED_INDEX_COMPLETE` when the query returns zero rows. This
+guarantees Phase 2 receives a call graph with no dead ends — every call resolves
+to a target, every reachable symbol has at least one caller.
 
 ### 2c: Merge Connections into SQLite
 
@@ -273,28 +333,25 @@ After all hunters complete:
    target_line).
 3. INSERT into the `connections` and `unresolved_connections` tables in `graph.db`.
 
-### 2d: User Interview for Unresolved Connections
+### 2d: Resolve Remaining Unresolved Connections
 
-If there are unresolved connections, present them to the user in batches of 5-10:
+Connection hunters now interview users directly via `AskUserQuestion` during their
+run, so most resolutions happen in-agent. This step handles anything that fell
+through (hunter hit context limit, AskUserQuestion was unavailable, etc.).
 
-```
-Connection Resolution Interview
-=================================
-The connection hunter found {N} indirect connections and couldn't resolve {M}:
-
-1. Event 'sync.complete' is emitted from src/services/sync.ts:89 but no listener
-   was found in this codebase.
-   → Is there an external consumer? [External service / Dead code / Explain]
-
-2. Route GET /admin/debug/cache has no observable side effects.
-   → Is this a developer tool? [Dev tool / Dead code / Missing link / Explain]
-
-3. Plugin loader uses dynamic dispatch: plugins[name].execute(context)
-   → What plugins exist? [List them / Config file location / Not used]
+Check for remaining unresolved items:
+```sql
+SELECT COUNT(*) FROM connection_hints WHERE resolved = 0;
+SELECT COUNT(*) FROM unresolved_connections WHERE resolved = 0;
 ```
 
-Save resolutions to `./docs/features/clarifications.md`. Re-run connection hunting
-for any "Explain" or "Missing link" responses that reveal new patterns to search for.
+If any remain, the orchestrator either:
+1. **Re-spawns hunters** for the affected files (preferred — they have the context
+   to interview effectively), OR
+2. **Interviews directly** using `AskUserQuestion` for small numbers of remaining
+   items, then marks them resolved in `graph.db`.
+
+Save all resolutions to `./docs/features/clarifications.md` for auditability.
 
 ### 2e: Enrich Call Graph in SQLite
 
@@ -324,16 +381,41 @@ graph.db is ready for graph construction.
 
 ## Resume Behavior
 
-This command tracks its progress in the `indexing` and `connection_hunting` sections
-of `./docs/features/.progress.json`.
+**`graph.db` is the source of truth for resume**, not `.progress.json`. On resume,
+query the database to determine current state — don't rely on stale file-based tracking.
+
+Resume queries:
+```sql
+-- Step 1b: Are all files indexed?
+SELECT COUNT(*) FROM file_manifest WHERE status != 'done';
+
+-- Step 1c: Has cross-reference pass run? (caller_count > 0 anywhere = yes)
+SELECT COUNT(*) FROM symbols WHERE caller_count > 0;
+
+-- Step 1c.4: Have graph-derived hints been generated?
+SELECT COUNT(*) FROM connection_hints WHERE type IN ('dead_end', 'dead_start');
+
+-- Step 2: How many hints remain unresolved?
+SELECT type, COUNT(*) FROM connection_hints WHERE resolved = 0 GROUP BY type;
+
+-- Step 2: Which files still need hunting?
+SELECT DISTINCT file FROM connection_hints WHERE resolved = 0;
+
+-- Completion gate: ready for Phase 2?
+SELECT COUNT(*) FROM connection_hints
+WHERE resolved = 0 AND type IN ('dead_end', 'dead_start');
+-- Must be 0 to pass.
+```
 
 Resume rules:
-- Step 1b (indexing agents): Use `.progress.json` to skip completed splits. Resume from
-  exact batch. Fall back to scanning index split files.
-- Step 1c-d (merge + validate): Re-run if any indexing splits were re-run.
-- Step 2a (file assignments): Re-run if indexing changed. Fast — just queries the index.
-- Step 2b (per-file hunting): Use `.progress.json` to skip completed files. Resume from
-  exact batch. Fall back to scanning per-file JSONL outputs for summary lines.
-- Step 2d (user interview): Skip if `clarifications.md` has connection resolutions.
-  Re-run for new unresolved items only.
-- Step 2e (enrich call graph): Re-run if connections changed.
+- **Step 1b** (indexing): Check `file_manifest` for `status != 'done'`. Re-index only
+  incomplete files. Fall back to `.progress.json` if `graph.db` doesn't exist yet.
+- **Step 1c-d** (merge + validate): Re-run if `file_manifest` has newly completed files.
+- **Step 2a** (file assignments): Query `connection_hints WHERE resolved = 0` for files.
+- **Step 2b** (hunting): Query unresolved hints per file — only spawn hunters for files
+  with remaining unresolved hints.
+- **Step 2d** (remaining unresolved): Query both `connection_hints` and
+  `unresolved_connections` for `resolved = 0`.
+- **Step 2e** (enrich call graph): Re-run if new connections were added since last run.
+- **Completion gate**: Phase 1 passes only when zero dead_end/dead_start hints remain
+  unresolved.

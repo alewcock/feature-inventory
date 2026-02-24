@@ -1,18 +1,20 @@
 # feature-inventory
 
-**v10.0.0**
+**v11.0.0**
 
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Builds a code reference index, hunts for every indirect connection (events, IPC, pub/sub, reactive chains), constructs an outcome graph, and derives features from what the code ACHIEVES — not how it's structured. Features describe outcomes, freeing re-implementors to build optimally without replicating legacy architecture.
 
 Also transforms the inventory into fully decomposed, implementation-ready plans for your target architecture and marketing-ready product catalogs for go-to-market teams.
 
-New in v10: **connection hunting batching and large file handling** — create-graph now drives connection hunting in a loop, spawning 2 parallel build-index tasks per iteration (each with 20 files) instead of one monolithic build-index that blew its context window on large codebases (339+ files). Batch size increased from 5→10 hunters per build-index instance. Connection hunters now chunk-read large files (500-line chunks for files >500 lines, with PARTIAL status support for files >1000 lines). An exhaustiveness mandate prevents agents from declaring early completion based on coverage percentages. build-index returns explicit status codes (INDEXING_COMPLETE, HUNTING_BATCH_DONE, ENRICHED_INDEX_COMPLETE) so the orchestrator can drive the loop with hard stop checkpoints between iterations.
+New in v11: **architecture consolidation** — removed the old dimension-based pipeline and its 11 exclusive agents. The graph pipeline is now the only `create` command (renamed from `create-graph`). Phase orchestrators (build-index, build-graph, annotate-pathways, derive-features) are now self-contained agents spawnable via Task, eliminating the fragile thin-wrapper indirection that broke Task agent spawning. Fixed agent/command name collisions. Plugin reduced from 26 agents to 13.
+
+New in v10: **connection hunting batching and large file handling** — create now drives connection hunting in a loop, spawning 2 parallel build-index tasks per iteration (each with 20 files) instead of one monolithic build-index that blew its context window on large codebases (339+ files). Batch size increased from 5→10 hunters per build-index instance. Connection hunters now chunk-read large files (500-line chunks for files >500 lines, with PARTIAL status support for files >1000 lines). An exhaustiveness mandate prevents agents from declaring early completion based on coverage percentages. build-index returns explicit status codes (INDEXING_COMPLETE, HUNTING_BATCH_DONE, ENRICHED_INDEX_COMPLETE) so the orchestrator can drive the loop with hard stop checkpoints between iterations.
 
 New in v9: **agent messaging and delegation model** — connection hunters now report progress, completion, and pre-death reasons via `SendMessage` instead of the orchestrator polling output files in sleep loops. The orchestrator stays unblocked and processes agent status as messages arrive. Phase commands (build-index, build-graph, annotate-pathways, derive-features) are now explicitly spawned as foreground Task agents with their own context windows, establishing clean team hierarchies where hunters message their direct team lead. Also recalibrates the context watchdog (780KB→1130KB capacity, fixes percentage formula that divided by BLOCK threshold instead of total capacity).
 
 New in v8: **hardened graph pipeline indexing contract** — Phase 1 is now explicitly two-step: (1) deterministic tree-sitter mechanical indexing and (2) per-file connection hunting. Tree-sitter is enforced as a fail-fast prerequisite (no manual/regex fallback for graph Phase 1), connection hunters are explicitly instructed to cover all 11 connection types for in/out matching on their assigned file, and the Phase 1→Phase 2 handoff is defined as a unified code-index edge layer in SQLite (`graph.db`).
 
-New in v7: **graph-based feature discovery** — a fundamentally new bottom-up pipeline (`/feature-inventory:create-graph`) that mechanically indexes every symbol in the codebase, relentlessly hunts for indirect connections (events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing), constructs an outcome graph tracing entry points through pathways to final outcomes, annotates each pathway with 6 dimensions (data, auth, logic, UI, config, side effects), and derives features from outcomes. Uses SQLite (`graph.db`) for the index/graph — queryable, incrementally updatable, scales to 50k+ symbols. Includes Rust, Swift, and Objective-C extraction patterns. Also adds `/feature-inventory:reindex` for incremental updates after code changes — identifies affected files, re-indexes symbols, re-traces pathways, flags features, and generates user-facing change notes in feature terms.
+New in v7: **graph-based feature discovery** — a fundamentally new bottom-up pipeline (`/feature-inventory:create`) that mechanically indexes every symbol in the codebase, relentlessly hunts for indirect connections (events, IPC, pub/sub, observables, DB triggers, middleware, DI, convention routing), constructs an outcome graph tracing entry points through pathways to final outcomes, annotates each pathway with 6 dimensions (data, auth, logic, UI, config, side effects), and derives features from outcomes. Uses SQLite (`graph.db`) for the index/graph — queryable, incrementally updatable, scales to 50k+ symbols. Includes Rust, Swift, and Objective-C extraction patterns. Also adds `/feature-inventory:reindex` for incremental updates after code changes — identifies affected files, re-indexes symbols, re-traces pathways, flags features, and generates user-facing change notes in feature terms.
 
 New in v6: **batch-level hard stops** — the orchestrator now performs a mandatory hard stop after every 2 completed agent batches during long-running steps. This prevents the catastrophic "prompt is too long" crash that occurred when the orchestrator ran for hours monitoring 100+ agents without ever yielding control. The VS Code context percentage UI does not update during a long-running turn, so without hard stops the user has zero visibility into context health. After each hard stop, the user can `/compact` or `/clear` and re-run — the command resumes from the progress file at the exact next batch.
 
@@ -86,14 +88,6 @@ This overwrites the existing installation with the latest release.
 
 When migrating a legacy product (10-20+ years) to new languages and platforms, you need a specification complete enough that an AI/agent team could implement the full rebuild without ever seeing the original source code. This plugin produces that specification.
 
-Two pipelines are available:
-
-- **Graph pipeline** (`create-graph`) — Bottom-up discovery. Indexes every symbol, hunts all indirect connections, builds an outcome graph, and derives features from what the code achieves. Produces outcome-focused features that describe WHAT to build, with source maps showing HOW the legacy system did it. Best for large, interconnected codebases where indirect connections (events, IPC, pub/sub) are critical.
-
-- **Dimension pipeline** (`create`) — Top-down analysis. Analyzes the codebase across 9 dimensions in parallel, then synthesizes features from the combined analysis. Best for getting started quickly or for codebases where the architecture is relatively straightforward.
-
-Both pipelines produce the same output format: a hierarchical feature index where every entry links to a detailed specification file.
-
 **Nothing is too small.** A tooltip, a default sort order, a 3-line validation rule, a retry delay, a password complexity requirement, an error message string - if the product exhibits the behavior, it gets documented.
 
 ## Graph Pipeline Phases
@@ -150,19 +144,16 @@ Phase 5: Index Maintenance
 
 | Command | Description |
 |---------|-------------|
-| `/feature-inventory:create [path]` | Run the dimension-based inventory analysis (top-down, 9 dimensions) |
-| `/feature-inventory:create-graph [path]` | Run the graph-based inventory pipeline (bottom-up, outcome-focused) |
+| `/feature-inventory:create [path]` | Run the graph-based inventory pipeline (bottom-up, outcome-focused) |
 | `/feature-inventory:reindex [--since commit] [--diff branch]` | Incrementally update the graph inventory after code changes |
 | `/feature-inventory:gap-analysis [new-project] [inventory-path]` | Compare a new project against the inventory |
 | `/feature-inventory:plan [inventory-path]` | Generate implementation plans from a completed inventory |
 | `/feature-inventory:marketing-catalog [inventory-path]` | Generate a marketing-ready product catalog for go-to-market teams |
 | `/feature-inventory:status` | Check progress of inventory, gap analysis, plan generation, or marketing catalog |
 
-## What It Analyzes
+## What It Produces
 
-### Graph Pipeline (create-graph)
-
-The graph pipeline indexes the codebase mechanically and discovers features from outcomes:
+The plugin indexes the codebase mechanically and discovers features from outcomes:
 
 | Layer | What It Produces |
 |-------|-----------------|
@@ -174,22 +165,6 @@ The graph pipeline indexes the codebase mechanically and discovers features from
 
 Supports: JavaScript/TypeScript, C#/.NET, Python, Ruby, Java/Kotlin, Go, PHP, Rust, Swift, Objective-C, C/C++, SQL/MySQL.
 
-### Dimension Pipeline (create)
-
-The dimension pipeline analyzes the codebase across 9 independent dimensions:
-
-| Dimension | What It Captures |
-|-----------|-----------------|
-| **API Surface** | Every endpoint with full request/response schemas, auth, errors, pagination |
-| **Data Models** | Every entity, field, type, constraint, relationship, index, enum |
-| **UI Screens** | Every page, form field, table column, button, modal, validation message, empty state |
-| **Business Logic** | Every rule, calculation, workflow, state machine, edge case, magic number |
-| **Integrations** | Every third-party service, SDK operation, webhook, retry policy |
-| **Background Jobs** | Every scheduled task, queue worker, retry config, dead letter policy |
-| **Auth & Permissions** | Every role, permission, enforcement point, session config, password policy |
-| **Configuration** | Every env var, config file key, feature flag, user-configurable setting |
-| **Events & Hooks** | Every event with payload schema, every subscriber, every middleware |
-
 ## Usage
 
 ### Create a feature inventory
@@ -198,25 +173,7 @@ The dimension pipeline analyzes the codebase across 9 independent dimensions:
 /feature-inventory:create [path-to-repo-or-parent-directory]
 ```
 
-The plugin will:
-1. **Check** that Agent Teams is enabled (fails immediately if not)
-2. **Interview you** about the product (captures tribal knowledge not in code)
-3. **Discover** the repo structure and tech stack
-4. **Analyze** all 9 dimensions in parallel via Agent Teams (batches of 5 teammates)
-5. **Ask clarifying questions** when teammates encounter ambiguity
-6. **Audit source coverage** to catch analysis gaps before synthesis
-7. **Build the feature hierarchy** with parallel synthesis via Agent Teams
-8. **Generate detail files** for every feature and behavior
-9. **Interview you again** to resolve thin, ambiguous, or overlapping features
-10. **Validate** against your original feature map
-
-### Create a graph-based feature inventory
-
-```
-/feature-inventory:create-graph [path-to-repo-or-parent-directory]
-```
-
-The graph pipeline discovers features bottom-up from what the code does:
+The plugin discovers features bottom-up from what the code does:
 1. **Interview you** about the product (reuses existing `interview.md` if present)
 2. **Discover** the repo structure and tech stack
 3. **Build enriched index** (Phase 1 — delegated to `build-index`):
@@ -237,9 +194,7 @@ The graph pipeline discovers features bottom-up from what the code does:
    - Interview you for quality resolution
    - Validate every pathway claimed by exactly one feature
 
-All structured data (index, connections, graph, annotations) lives in a single SQLite database (`docs/features/graph.db`). Feature detail files are the same markdown format as the dimension pipeline.
-
-If a previous dimension-pipeline run exists, the graph pipeline reuses `interview.md`, `discovery.json`, and `clarifications.md`, and cross-references the previous raw dimension outputs to validate completeness.
+All structured data (index, connections, graph, annotations) lives in a single SQLite database (`docs/features/graph.db`).
 
 ### Incrementally update after code changes
 
@@ -305,11 +260,11 @@ Shows plugin version, interview status, which dimensions are complete, coverage 
 
 ### Resume after interruption
 
-Just run `/feature-inventory:create` again. It detects completed work and picks up where it left off. All progress is persisted to disk. Derived artifacts (synthesis plan, coverage audit, indexes) are automatically cleared and regenerated from the raw data.
+Just run `/feature-inventory:create` again. It detects completed work and picks up where it left off. All progress is persisted to disk — the SQLite database (`graph.db`), intermediate JSONL files, and `.progress.json` enable precise batch-level resume.
 
 ## Output Structure
 
-### Feature Inventory (Graph Pipeline)
+### Feature Inventory
 
 ```
 docs/features/
@@ -331,31 +286,6 @@ docs/features/
 ├── user-feature-map.md        # User's mental model of features
 ├── clarifications.md          # Resolved ambiguities (connections + graph)
 ├── clarifications-features.md # Resolved ambiguities (feature specs)
-└── discovery.json, plan.json
-```
-
-### Feature Inventory (Dimension Pipeline)
-
-```
-docs/features/
-├── FEATURE-INDEX.md           # Master table of contents (names + links only)
-├── FEATURE-INDEX.json         # Machine-readable for agent orchestrators
-├── details/                   # One spec file per feature/behavior
-│   ├── F-001.md              # Major feature overview
-│   ├── F-001.01.md           # Sub-feature: full spec with data/API/UI/rules
-│   ├── F-001.01.01.md        # Behavior: atomic implementable spec
-│   └── ...
-├── interview.md               # User interview answers
-├── user-feature-map.md        # User's mental model of features
-├── clarifications.md          # Resolved ambiguities (code analysis)
-├── clarifications-features.md # Resolved ambiguities (feature specs)
-├── coverage-audit.json        # Source file coverage report
-├── synthesis-plan.json        # Feature-to-dimension mapping
-├── raw/                       # Per-dimension analysis (intermediate)
-│   └── {repo-name}/
-│       ├── api-surface.md
-│       ├── data-models.md
-│       └── ...
 └── discovery.json, plan.json
 ```
 
@@ -425,37 +355,16 @@ docs/marketing/
 
 ## How Agent Teams Are Used
 
-The orchestrator (lead) runs in **delegate mode** - coordination only, no direct analysis.
+The orchestrator runs in **delegate mode** — coordination only, no direct analysis. Each pipeline phase is spawned as a Task agent with its own context window and team hierarchy:
 
-Teammates are spawned in batches of 5, each assigned one dimension of one repo. They:
-- Read `references/context-management.md` for context window discipline
-- Use grep/glob for discovery, targeted reads only
-- Write findings to disk incrementally (never accumulate in context)
-- Flag ambiguities with `[AMBIGUOUS]` tags
-- Communicate via the shared task list and messaging
+- **Phase 1 (build-index):** Spawns indexing teammates (batches of 5) and connection hunters (batches of 10). Each hunter gets one file and reports findings via SendMessage.
+- **Phase 2 (build-graph):** Spawns graph builder agent(s) to trace entry points → pathways → final outcomes.
+- **Phase 3 (annotate-pathways):** Spawns pathway annotators (batches of 5) grouped by entry point.
+- **Phase 4 (derive-features):** Spawns feature derivers (batches of 5) per cluster. Includes user resolution interview for thin/overlapping/ambiguous features.
 
-This means:
-- 9 dimensions can be analyzed in ~2 batches instead of sequentially
-- Each teammate has a fresh context window (no accumulated bloat)
-- Failures are isolated (one dimension failing doesn't affect others)
-- Partial progress is always preserved on disk
+Each phase creates its own team, becoming the team lead. Teammates communicate via SendMessage to their team lead — messages don't propagate to the top-level orchestrator. This keeps context windows clean and team hierarchies simple.
 
-### Synthesis (Step 4)
-
-Feature synthesis is also parallelized via Agent Teams. Each teammate takes one major feature area and cross-references all 9 raw dimension files to produce complete detail files. On re-runs, teammates operate in **verify mode** — auditing existing detail files against raw data and patching gaps rather than rewriting from scratch.
-
-### User Resolution Interview (Step 4.5)
-
-After synthesis, the orchestrator scans all detail files to identify features that are thin, ambiguous, overlapping, or orphaned. For each candidate, it presents the user with targeted questions and actionable options:
-
-- **Thin specs** — Define (provide context), Merge (into another feature), or Remove
-- **Overlapping features** — Keep both (clarify relationship), Merge, or Clarify the distinction
-- **Unresolved ambiguities** — Answer specific questions or skip (marked `[UNRESOLVED]`)
-- **Orphan behaviors** — Assign to correct parent, Define, or Remove
-
-This eliminates the "shallow feature" problem where downstream agents encounter vague specs and either skip them or hallucinate. Every feature in the final index is either fully specified, explicitly related to another feature, or honestly marked as unresolved.
-
-### Plan Generation (Steps 1-8)
+### Plan Generation
 
 Plan generation uses Agent Teams at three levels:
 
@@ -472,7 +381,7 @@ Plan output is designed to work with multiple implementation tools:
 
 ## Agents
 
-### Graph Pipeline Agents
+### Pipeline Agents
 
 | Agent | Purpose |
 |-------|---------|
@@ -481,21 +390,6 @@ Plan output is designed to work with multiple implementation tools:
 | `graph-builder` | Constructs outcome graph: identifies entry points and final outcomes, traces pathways through the enriched call graph, detects fan-out points, classifies infrastructure, validates coverage |
 | `pathway-dimension-annotator` | Annotates each pathway with 6 dimensions (data, auth, logic, UI, config, side effects). Every annotation includes source maps back to the code reference index |
 | `feature-deriver` | Clusters annotated pathways into features named by outcome. Builds hierarchy (major → sub-feature → behavior) with links, source maps, and test cases |
-
-### Dimension Pipeline Agents
-
-| Agent | Purpose |
-|-------|---------|
-| `api-analyzer` | API endpoints, request/response schemas, auth, errors |
-| `data-model-analyzer` | Entities, fields, types, constraints, relationships |
-| `ui-analyzer` | Pages, forms, tables, modals, validation messages, empty states |
-| `logic-analyzer` | Business rules, calculations, workflows, state machines |
-| `integration-analyzer` | Third-party services, SDKs, webhooks, retry policies |
-| `jobs-analyzer` | Scheduled tasks, queue workers, retry config |
-| `auth-analyzer` | Roles, permissions, enforcement points, session config |
-| `config-analyzer` | Env vars, config files, feature flags |
-| `events-analyzer` | Events, payload schemas, subscribers, middleware |
-| `feature-synthesizer` | Cross-references all dimensions to produce detail files (create/verify modes) |
 
 ### Shared Agents
 
@@ -506,23 +400,11 @@ Plan output is designed to work with multiple implementation tools:
 | `plan-section-writer` | Writes self-contained implementation section files in parallel |
 | `marketing-catalog-writer` | Translates feature areas into marketing-ready catalog entries with user interviews |
 
-## Customization
-
-### Adding a new dimension
-
-1. Create a new agent in `agents/{dimension-name}.md`
-2. Update the orchestrator's Step 2 (plan) to include the new dimension
-3. Update `references/output-format.md` with the new dimension abbreviation
-
-### Adjusting scope
-
-After Step 2, edit `./docs/features/plan.json` to remove dimensions or adjust directory scopes before continuing.
-
 ## Token Usage
 
 Agent Teams is token-intensive. Each teammate is a full Claude Code session.
 
-### Feature Inventory — Graph Pipeline (create-graph)
+### Feature Inventory (create)
 
 For a medium-sized product (3 repos, ~50,000 lines):
 - Interview: ~10k tokens (skipped if `interview.md` exists)
@@ -539,20 +421,7 @@ For a medium-sized product (3 repos, ~50,000 lines):
 
 Subtotal: ~1.3M-1.5M tokens.
 
-The graph pipeline is more token-intensive than the dimension pipeline for initial creation, but produces incrementally updatable artifacts. Subsequent `reindex` runs are much cheaper — typically 50k-200k tokens depending on change scope.
-
-### Feature Inventory — Dimension Pipeline (create)
-
-For a medium-sized product (3 repos, all 9 dimensions), expect roughly:
-- Interview: ~10k tokens
-- Discovery + Planning: ~20k tokens
-- Analysis (9 dimensions x ~50k each): ~450k tokens across teammates
-- Coverage audit + gap filling: ~50k tokens
-- Synthesis (parallel): ~150k tokens across teammates
-- User resolution interview: ~20-50k tokens (depends on candidate count)
-- Index + validation: ~50k tokens
-
-Subtotal: ~750k-850k tokens.
+Subsequent `reindex` runs are much cheaper — typically 50k-200k tokens depending on change scope.
 
 ### Plan Generation (plan)
 
@@ -577,4 +446,4 @@ For a medium-sized inventory (15 major features):
 
 Subtotal: ~700k-800k tokens.
 
-**Claude Max subscription strongly recommended.** The combined workflow (create-graph + gap-analysis + plan + marketing-catalog) can exceed 4M tokens for medium products.
+**Claude Max subscription strongly recommended.** The combined workflow (create + gap-analysis + plan + marketing-catalog) can exceed 4M tokens for medium products.

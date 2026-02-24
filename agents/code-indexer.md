@@ -613,13 +613,15 @@ CREATE TABLE file_manifest (
 
 CREATE TABLE connection_hints (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  type TEXT NOT NULL,           -- dynamic_call, string_key_dispatch, framework_magic, reflection,
+  hint_type TEXT NOT NULL,      -- dynamic_call, string_key_dispatch, framework_magic, reflection,
                                 -- data_store_access, dead_end, dead_start
   file TEXT NOT NULL,
-  line INTEGER NOT NULL,
-  expression TEXT,
-  note TEXT,
-  resolved INTEGER DEFAULT 0   -- Set to 1 after connection hunter processes it
+  line INTEGER,
+  pattern TEXT,
+  context TEXT,
+  resolved INTEGER DEFAULT 0,  -- Set to 1 after connection hunter processes it
+  repo TEXT,
+  split_source TEXT
 );
 
 -- Indexes for common query patterns
@@ -652,7 +654,7 @@ WHERE c.callee_name = 'calculateShippingCost';
 SELECT * FROM symbols WHERE caller_count = 0 AND type = 'route';
 
 -- Find unresolved connection hints for a specific type
-SELECT * FROM connection_hints WHERE type = 'dynamic_call' AND resolved = 0;
+SELECT * FROM connection_hints WHERE hint_type = 'dynamic_call' AND resolved = 0;
 
 -- Find all symbols exported from a file
 SELECT * FROM symbols WHERE file = 'src/services/order.ts' AND exports_json != '[]';

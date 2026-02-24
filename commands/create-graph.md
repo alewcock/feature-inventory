@@ -174,7 +174,7 @@ Write to `./docs/features/plan.json`.
 
 ## Step 3: Build Enriched Index (Phase 1)
 
-**Delegate to `commands/build-index.md`.**
+**Spawn `commands/build-index.md` as a foreground Task agent.**
 
 This step produces the enriched code reference index: every symbol indexed via
 tree-sitter, every indirect connection hunted per-file, user interview for unresolved
@@ -186,12 +186,36 @@ stop and report the prerequisite failure instead of continuing with degraded ind
 
 **Together, Steps 1-3 complete Graph Pipeline Phase 1 (Discovery + Index).**
 
-Read and follow `commands/build-index.md`. When it completes, `graph.db` contains the
-Phase 1 **code-index layer** (mechanical tree-sitter indexing + per-file hunted indirect
-connections) and the full enriched call graph — direct calls AND indirect connections —
-ready for graph construction.
+### Delegation Model
 
-**Do NOT proceed to Step 4 until `build-index.md` reports the enriched index is complete.**
+**Do NOT "read and follow" build-index.md yourself.** Instead, spawn it as a **foreground
+Task agent** using the `feature-inventory:build-index` command. This gives build-index
+its own context window, which is critical because:
+
+1. **Context isolation:** build-index manages 30+ batches of connection hunters. That
+   monitoring overhead stays in build-index's context, not yours.
+2. **Clean team hierarchy:** build-index creates its own team and becomes the team lead.
+   Connection hunters SendMessage their progress/completion/death reports to build-index
+   (their team lead). Messages do NOT propagate up to you — and they don't need to.
+3. **Simple boundary:** You spawn one Task, it runs to completion, you get the result.
+   No message relay needed.
+
+```
+create-graph orchestrator (you)
+  └── spawns build-index via Task (foreground, waits for result)
+       └── build-index creates team, becomes team lead
+            └── connection hunters SendMessage → build-index ✓
+       └── build-index returns summary to you when done
+```
+
+Pass build-index the paths it needs: `plan.json`, `graph.db`, repo paths, `discovery.json`,
+and a brief product context from the interview.
+
+When the Task returns, `graph.db` contains the Phase 1 **code-index layer** (mechanical
+tree-sitter indexing + per-file hunted indirect connections) and the full enriched call
+graph — direct calls AND indirect connections — ready for graph construction.
+
+**Do NOT proceed to Step 4 until the build-index Task returns successfully.**
 
 ### Context Checkpoint: After Phase 1
 
@@ -202,17 +226,17 @@ Preserved files: everything from previous steps, enriched `graph.db`,
 
 ## Step 4: Build Outcome Graph (Phase 2)
 
-**Delegate to `commands/build-graph.md`.**
+**Spawn `commands/build-graph.md` as a foreground Task agent** (same delegation model
+as Step 3 — see "Delegation Model" above for rationale).
 
 This step constructs the outcome graph from the enriched index in `graph.db`: identifies
 entry points and final outcomes, traces pathways between them, validates the graph, and
 interviews the user about orphans, unreachable outcomes, and graph gaps.
 
-Read and follow `commands/build-graph.md`. When it completes, `graph.db` contains the
-full outcome graph — entry points, pathways, final outcomes, fan-out points — ready for
-pathway annotation.
+When the Task returns, `graph.db` contains the full outcome graph — entry points,
+pathways, final outcomes, fan-out points — ready for pathway annotation.
 
-**Do NOT proceed to Step 5 until `build-graph.md` reports the outcome graph is complete.**
+**Do NOT proceed to Step 5 until the build-graph Task returns successfully.**
 
 ### Context Checkpoint: After Phase 2
 
@@ -222,15 +246,15 @@ Preserved files: everything from previous steps + graph tables in `graph.db`
 
 ## Step 5: Annotate Pathways (Phase 3)
 
-**Delegate to `commands/annotate-pathways.md`.**
+**Spawn `commands/annotate-pathways.md` as a foreground Task agent** (same delegation model).
 
 This step annotates every pathway with dimensional information: data, auth, logic, UI,
 config, and side effects — extracted from source code at each pathway step.
 
-Read and follow `commands/annotate-pathways.md`. When it completes, `graph.db` contains
-dimensional annotations on every pathway — ready for feature derivation.
+When the Task returns, `graph.db` contains dimensional annotations on every pathway —
+ready for feature derivation.
 
-**Do NOT proceed to Step 6 until `annotate-pathways.md` reports annotation is complete.**
+**Do NOT proceed to Step 6 until the annotate-pathways Task returns successfully.**
 
 ### Context Checkpoint: After Phase 3
 
@@ -240,15 +264,14 @@ Preserved files: everything from previous steps + annotations merged in `graph.d
 
 ## Step 6: Derive Features, Build Index & Validate (Phase 4)
 
-**Delegate to `commands/derive-features.md`.**
+**Spawn `commands/derive-features.md` as a foreground Task agent** (same delegation model).
 
 This step clusters pathways into feature areas, spawns feature derivation agents,
 interviews the user for quality resolution, builds the feature index, and validates
 full coverage.
 
-Read and follow `commands/derive-features.md`. When it completes, the full feature
-inventory exists: detail files (`F-*.md`), navigable index (`FEATURE-INDEX.md`),
-and machine-readable index (`FEATURE-INDEX.json`).
+When the Task returns, the full feature inventory exists: detail files (`F-*.md`),
+navigable index (`FEATURE-INDEX.md`), and machine-readable index (`FEATURE-INDEX.json`).
 
 **This is the final phase. When `derive-features.md` reports completion, the pipeline
 is done.**

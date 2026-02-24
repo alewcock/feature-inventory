@@ -66,6 +66,16 @@ SendMessage {
 }
 ```
 
+For large files (>500 lines), include chunk progress:
+```
+SendMessage {
+  type: "message",
+  recipient: "<team-lead-name>",
+  content: "PROGRESS: <your-file> — chunk 3/6, found 18 patterns so far. 12 connections written.",
+  summary: "<file-basename>: chunk 3/6, 12 connections"
+}
+```
+
 ### Completion Report (MANDATORY before terminating)
 
 When you finish your file, send a completion message BEFORE terminating:
@@ -482,9 +492,41 @@ The orchestrator will present these to the user and feed resolutions back.
 
 You have ONE file. Process it completely, then terminate.
 
-### Phase 1: Read your file and the index
+### Phase 0: Check file size and plan reading strategy
 
-1. **Read your assigned file** to understand its contents (use line ranges for files >200 lines).
+Before reading your file, check its line count:
+
+```bash
+wc -l < "<file_path>"
+```
+
+**Large file strategy:**
+
+- **≤500 lines:** Read the entire file at once (standard behavior).
+- **501–1000 lines:** Read in 2 chunks (lines 1-500, then 501-end). After each chunk,
+  extract connection patterns and write findings to JSONL immediately. Then proceed to
+  the grep phase with all accumulated patterns.
+- **>1000 lines:** Read in chunks of 500 lines. After EACH chunk: extract connection
+  patterns, write findings to JSONL, then **discard the chunk from your working memory**
+  (don't try to hold the whole file). After all chunks, proceed to the grep phase with
+  accumulated patterns. If you hit context limits before finishing all chunks, write a
+  summary with `"status": "PARTIAL"` indicating which line you reached.
+
+The key insight: you don't need the whole file in context at once. Connection patterns
+(emit, subscribe, on(, AddSingleton, etc.) are identifiable per-chunk. Extract the
+pattern strings, write them, move on.
+
+### Phase 1: Read your file in chunks and query the index
+
+1. **Read your assigned file** using the chunked strategy from Phase 0:
+   - For each chunk (up to 500 lines):
+     a. Read the chunk
+     b. Scan for connection patterns (all 11 types)
+     c. Extract pattern keys (event names, channel names, topic strings, etc.)
+     d. Write any self-contained connections (e.g., DI bindings fully visible in chunk)
+     e. Accumulate pattern keys that need cross-repo grep
+   - After all chunks read (or context limit reached):
+     → Proceed to Phase 2 with accumulated pattern keys
 2. **Query the index** for symbols in your file:
    ```sql
    SELECT * FROM symbols WHERE file = ?;

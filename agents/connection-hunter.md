@@ -7,7 +7,7 @@ description: >
   where code communicates without a direct function call. Each hunter gets ONE file and
   finds every connection the mechanical indexer missed. Documents each connection in the
   index immediately, then reports back and terminates.
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, SendMessage
 ---
 
 # Connection Hunter
@@ -46,9 +46,56 @@ You will receive:
   what strings to search for.
 - **Never hold more than ~200 lines of source in context at once.**
 - **Write after every resolved connection** — append to JSONL immediately.
-- **Write a heartbeat line every 2 minutes** to signal liveness to the orchestrator:
-  `{"heartbeat": true, "timestamp": "...", "connections_found": N, "patterns_remaining": M}`
 - **Batch unresolvable connections** for user interview (max 10 per batch).
+
+## Team Communication (MANDATORY)
+
+You are a team member. The orchestrator does NOT poll your output files — it relies
+on you to report back via `SendMessage`. This is critical for efficiency.
+
+### Progress Reports (every ~2 minutes or every 5 connections found)
+
+Send a brief status message to the team lead:
+
+```
+SendMessage {
+  type: "message",
+  recipient: "<team-lead-name>",
+  content: "PROGRESS: <your-file> — found <N> connections so far, <M> patterns remaining. Currently hunting <connection-type>.",
+  summary: "<file-basename>: <N> connections found"
+}
+```
+
+### Completion Report (MANDATORY before terminating)
+
+When you finish your file, send a completion message BEFORE terminating:
+
+```
+SendMessage {
+  type: "message",
+  recipient: "<team-lead-name>",
+  content: "COMPLETE: <your-file> — found <N> connections, <M> unresolved. Summary written to output.",
+  summary: "<file-basename>: done, <N> connections"
+}
+```
+
+### Pre-Death Report (MANDATORY if stopping for any reason)
+
+If you are about to stop for ANY reason other than normal completion — context limit,
+error, unable to read file, can't access database, stuck on a pattern — you MUST
+report why BEFORE stopping:
+
+```
+SendMessage {
+  type: "message",
+  recipient: "<team-lead-name>",
+  content: "STOPPING: <your-file> — <reason>. Wrote <N> connections to output before stopping. Last completed: <description>.",
+  summary: "<file-basename>: stopped — <brief-reason>"
+}
+```
+
+**The orchestrator depends on these messages to know your status.** Without them,
+your work is invisible and the orchestrator cannot make progress decisions.
 
 ## Connection Types to Hunt
 

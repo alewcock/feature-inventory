@@ -75,12 +75,11 @@ For each indexing split in the plan:
      call sites, signatures, and exports. Write to disk after every file. Flag dynamic
      dispatch, framework magic, and reflection for the connection hunter. Do NOT interpret
      meaning — only record structure."**
-5. **Wait for each batch** before spawning the next.
+5. **Wait for agent messages** — do NOT poll output files in a sleep loop. Agents
+   report back via `SendMessage` with progress updates, completion, and pre-death
+   explanations. The orchestrator stays unblocked and processes messages as they arrive.
 6. **Update `.progress.json`** after each batch.
-7. **Monitor agent liveness** using the heartbeat protocol (see
-   `references/context-management.md`). Do NOT assume an agent is dead unless its
-   output file has not been modified for 5+ minutes.
-8. **Batch-level hard stop (every 2 batches).** See `references/context-management.md`.
+7. **Batch-level hard stop (every 2 batches).** See `references/context-management.md`.
 
 ### 1c: Create SQLite Database and Merge Indexes
 
@@ -239,9 +238,10 @@ For each file in the connection hunting list:
      find it. When you can't find a match, write it as unresolved with a specific
      question for the user. When you're done with your file, write a summary line
      and terminate."**
-5. **Monitor agent liveness** using the heartbeat protocol (see
-   `references/context-management.md`). Do NOT assume an agent is dead unless its
-   output file has not been modified for 5+ minutes.
+5. **Wait for agent messages** — do NOT poll output files. Connection hunters report
+   progress, completion, and pre-death reasons via `SendMessage`. The orchestrator
+   stays unblocked and processes messages as they arrive. Also pass the team lead name
+   to each agent so it knows who to message.
 6. **Batch-level hard stop (every 2 batches).**
 
 ### 2c: Merge Connections into SQLite

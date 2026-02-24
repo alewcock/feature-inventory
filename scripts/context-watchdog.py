@@ -24,14 +24,18 @@ import time
 # ---------------------------------------------------------------------------
 # Thresholds — expressed as transcript GROWTH in KB since last reset.
 #
-# Calibration: ~780KB total transcript ≈ 100% context window.
+# Calibration: ~1130KB total transcript growth ≈ 100% context window.
+# (Measured: 768KB growth = 68% actual capacity → 100% ≈ 1130KB)
 # After /clear the baseline resets, so growth tracks actual usage.
 # ---------------------------------------------------------------------------
 
+# Estimated total context capacity in KB of transcript growth
+TOTAL_CAPACITY_KB = 1130
+
 # Transcript growth thresholds (KB since baseline)
-WARN_GROWTH_KB = 400        # ~51% of window — "plan to checkpoint soon"
-CRITICAL_GROWTH_KB = 550    # ~70% — "checkpoint NOW"
-BLOCK_GROWTH_KB = 650       # ~83% — block expensive operations
+WARN_GROWTH_KB = 565        # ~50% of window — "plan to checkpoint soon"
+CRITICAL_GROWTH_KB = 790    # ~70% — "checkpoint NOW"
+BLOCK_GROWTH_KB = 960       # ~85% — block expensive operations
 
 # If transcript size drops by more than this fraction of last seen size,
 # assume /clear happened and auto-reset.
@@ -169,7 +173,7 @@ def main():
     # --- PostToolUse: inject warnings into Claude's context ---
     if event == "PostToolUse":
         if risk != "OK" and should_emit_warning(state, risk):
-            pct = min(99, int(growth_kb / BLOCK_GROWTH_KB * 100))
+            pct = min(99, int(growth_kb / TOTAL_CAPACITY_KB * 100))
 
             if risk == "BLOCK":
                 msg = (

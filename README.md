@@ -1,10 +1,12 @@
 # feature-inventory
 
-**v8.0.0**
+**v9.0.0**
 
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Builds a code reference index, hunts for every indirect connection (events, IPC, pub/sub, reactive chains), constructs an outcome graph, and derives features from what the code ACHIEVES — not how it's structured. Features describe outcomes, freeing re-implementors to build optimally without replicating legacy architecture.
 
 Also transforms the inventory into fully decomposed, implementation-ready plans for your target architecture and marketing-ready product catalogs for go-to-market teams.
+
+New in v9: **agent messaging and delegation model** — connection hunters now report progress, completion, and pre-death reasons via `SendMessage` instead of the orchestrator polling output files in sleep loops. The orchestrator stays unblocked and processes agent status as messages arrive. Phase commands (build-index, build-graph, annotate-pathways, derive-features) are now explicitly spawned as foreground Task agents with their own context windows, establishing clean team hierarchies where hunters message their direct team lead. Also recalibrates the context watchdog (780KB→1130KB capacity, fixes percentage formula that divided by BLOCK threshold instead of total capacity).
 
 New in v8: **hardened graph pipeline indexing contract** — Phase 1 is now explicitly two-step: (1) deterministic tree-sitter mechanical indexing and (2) per-file connection hunting. Tree-sitter is enforced as a fail-fast prerequisite (no manual/regex fallback for graph Phase 1), connection hunters are explicitly instructed to cover all 11 connection types for in/out matching on their assigned file, and the Phase 1→Phase 2 handoff is defined as a unified code-index edge layer in SQLite (`graph.db`).
 

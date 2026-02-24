@@ -1,10 +1,12 @@
 # feature-inventory
 
-**v9.0.0**
+**v10.0.0**
 
 A Claude Code plugin that reverse-engineers every feature, behavior, and capability across one or more codebases using **Agent Teams** for parallel analysis. Builds a code reference index, hunts for every indirect connection (events, IPC, pub/sub, reactive chains), constructs an outcome graph, and derives features from what the code ACHIEVES — not how it's structured. Features describe outcomes, freeing re-implementors to build optimally without replicating legacy architecture.
 
 Also transforms the inventory into fully decomposed, implementation-ready plans for your target architecture and marketing-ready product catalogs for go-to-market teams.
+
+New in v10: **connection hunting batching and large file handling** — create-graph now drives connection hunting in a loop, spawning 2 parallel build-index tasks per iteration (each with 20 files) instead of one monolithic build-index that blew its context window on large codebases (339+ files). Batch size increased from 5→10 hunters per build-index instance. Connection hunters now chunk-read large files (500-line chunks for files >500 lines, with PARTIAL status support for files >1000 lines). An exhaustiveness mandate prevents agents from declaring early completion based on coverage percentages. build-index returns explicit status codes (INDEXING_COMPLETE, HUNTING_BATCH_DONE, ENRICHED_INDEX_COMPLETE) so the orchestrator can drive the loop with hard stop checkpoints between iterations.
 
 New in v9: **agent messaging and delegation model** — connection hunters now report progress, completion, and pre-death reasons via `SendMessage` instead of the orchestrator polling output files in sleep loops. The orchestrator stays unblocked and processes agent status as messages arrive. Phase commands (build-index, build-graph, annotate-pathways, derive-features) are now explicitly spawned as foreground Task agents with their own context windows, establishing clean team hierarchies where hunters message their direct team lead. Also recalibrates the context watchdog (780KB→1130KB capacity, fixes percentage formula that divided by BLOCK threshold instead of total capacity).
 

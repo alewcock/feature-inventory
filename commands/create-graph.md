@@ -174,11 +174,8 @@ Write to `./docs/features/plan.json`.
 
 ## Step 3: Build Enriched Index (Phase 1)
 
-**Spawn `commands/build-index.md` as a foreground Task agent.**
-
-This step produces the enriched code reference index: every symbol indexed via
-tree-sitter, every indirect connection hunted per-file, user interview for unresolved
-connections, and the call graph enriched with indirect edges.
+This step produces the enriched code reference index in two phases: mechanical indexing
+(once), then iterative connection hunting in bounded batches.
 
 **Tree-sitter is REQUIRED for Phase 1 mechanical indexing.** Do not run Phase 1 with
 regex/manual extraction fallbacks. If tree-sitter tooling or grammars are unavailable,
@@ -188,34 +185,69 @@ stop and report the prerequisite failure instead of continuing with degraded ind
 
 ### Delegation Model
 
-**Do NOT "read and follow" build-index.md yourself.** Instead, spawn it as a **foreground
-Task agent** using the `feature-inventory:build-index` command. This gives build-index
-its own context window, which is critical because:
-
-1. **Context isolation:** build-index manages 30+ batches of connection hunters. That
-   monitoring overhead stays in build-index's context, not yours.
-2. **Clean team hierarchy:** build-index creates its own team and becomes the team lead.
-   Connection hunters SendMessage their progress/completion/death reports to build-index
-   (their team lead). Messages do NOT propagate up to you — and they don't need to.
-3. **Simple boundary:** You spawn one Task, it runs to completion, you get the result.
-   No message relay needed.
-
 ```
 create-graph orchestrator (you)
-  └── spawns build-index via Task (foreground, waits for result)
-       └── build-index creates team, becomes team lead
-            └── connection hunters SendMessage → build-index ✓
-       └── build-index returns summary to you when done
+  ├── spawns build-index (mechanical indexing — once)
+  └── connection hunting loop:
+      ├── spawns 2× build-index in parallel (each with 20 files)
+      ├── collects results, updates .progress.json
+      ├── hard stop → user /clears → re-runs
+      └── repeat until all files hunted
 ```
 
-Pass build-index the paths it needs: `plan.json`, `graph.db`, repo paths, `discovery.json`,
-and a brief product context from the interview.
+**Do NOT "read and follow" build-index.md yourself.** Spawn it as **foreground Task
+agents** using the `feature-inventory:build-index` command. Each gets its own context
+window.
 
-When the Task returns, `graph.db` contains the Phase 1 **code-index layer** (mechanical
-tree-sitter indexing + per-file hunted indirect connections) and the full enriched call
-graph — direct calls AND indirect connections — ready for graph construction.
+### Phase A — Mechanical Indexing (once)
 
-**Do NOT proceed to Step 4 until the build-index Task returns successfully.**
+Spawn one build-index Task for tree-sitter indexing. Pass it `plan.json`, `graph.db`,
+repo paths, `discovery.json`, and a brief product context from the interview. Do NOT
+pass `assigned_files` — this triggers the full indexing flow (Steps 1a-1d in build-index).
+
+Wait for completion. build-index returns `INDEXING_COMPLETE`.
+
+### Phase B — Connection Hunting Loop
+
+After mechanical indexing completes, drive the connection hunting from create-graph
+in a loop:
+
+1. **Read `.progress.json`** for the `connection_hunting` section. Get the list of
+   pending files from `intermediate/connection-hunting-files.json`.
+2. **On first iteration:** Spawn one build-index Task WITHOUT `assigned_files` to
+   determine the connection hunting file list (Step 2a). It returns after writing
+   `intermediate/connection-hunting-files.json`. Then read the file list.
+3. **Take the next 40 pending files** from the list.
+4. **Split into 2 chunks of 20.** Spawn **2 parallel build-index Tasks**, each with:
+   - `assigned_files`: their 20 files
+   - `max_files: 20`
+   - All standard paths (`plan.json`, `graph.db`, repo path, etc.)
+   Each build-index creates its own team with a unique name (e.g.,
+   `fi-hunt-batch-A-{N}`, `fi-hunt-batch-B-{N}` where N is the loop iteration).
+   Each spawns up to 10 hunters in batches within its context window.
+5. **Wait for both to complete.** Each returns `HUNTING_BATCH_DONE`.
+6. **Update `.progress.json`** — move hunted files from pending to completed/partial.
+7. **If more pending files remain** → present a **hard stop checkpoint**:
+   ```
+   Connection Hunting Progress
+   =============================
+   Completed: {done} / {total} files
+   Remaining: {remaining} files
+   Next batch: {min(40, remaining)} files
+
+   ⚠ CONTEXT CHECKPOINT — /clear recommended before continuing.
+   Re-run /feature-inventory:create-graph to resume from here.
+   ```
+8. **When all files are done** → spawn one final build-index Task for merge/validate/
+   enrich (Steps 2c-2e). It returns `ENRICHED_INDEX_COMPLETE`.
+
+### Phase B — Resume Behavior
+
+On resume (after /clear), check `.progress.json`:
+- If `enriched_index_complete == true` → skip to Step 4
+- If `connection_hunting.pending_count > 0` → continue the loop from step 3
+- If `connection_hunting.pending_count == 0` but `merged_to_sqlite == false` →
+  spawn build-index for merge/validate/enrich
 
 ### Context Checkpoint: After Phase 1
 
@@ -303,9 +335,10 @@ Resume rules:
 - Step 0: Skip if `interview.md` exists.
 - Step 1: Skip if `discovery.json` exists.
 - Step 2: Re-run unless `plan.json` exists and discovery hasn't changed.
-- Step 3 (Phase 1 — enriched index): Delegates to `build-index.md` which tracks its
-  own progress in the `indexing` and `connection_hunting` sections of `.progress.json`.
-  See `build-index.md` for detailed resume rules.
+- Step 3 (Phase 1 — enriched index): Two-phase delegation. Mechanical indexing runs
+  once; connection hunting runs in a loop driven by create-graph (2×20 files per
+  iteration). Resume reads `.progress.json` `connection_hunting` section to determine
+  pending files and continues the loop. See `build-index.md` for per-invocation rules.
 - Step 4 (Phase 2 — outcome graph): Delegates to `build-graph.md` which tracks its
   own progress in the `graph_building` section of `.progress.json`.
   See `build-graph.md` for detailed resume rules.
@@ -338,6 +371,8 @@ Resume rules:
     "completed_files": ["src/services/order.ts", "src/handlers/ipc-handlers.ts"],
     "pending_files": ["src/events/emitter.ts", "src/middleware/auth.ts"],
     "failed_files": [],
+    "large_files": ["src/services/SyncServiceCore.cs"],
+    "large_file_count": 1,
     "user_interview_done": false,
     "merged_to_sqlite": false,
     "call_graph_enriched": false

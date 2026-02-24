@@ -37,6 +37,11 @@ Receives from the calling orchestrator:
 - `repo_path`: Absolute path to the repository
 - `discovery.json`: Repo structure and tech stack
 - `product_context`: Brief summary from interview
+- `assigned_files` (optional): List of specific files to connection-hunt. When provided,
+  skip Step 2a (file determination) and hunt ONLY these files.
+- `max_files` (optional): Maximum number of files to process in this session. Defaults
+  to 20. The orchestrator uses this to bound each build-index invocation to a
+  context-safe file count.
 
 ## Preflight Gate: Tree-Sitter Required
 
@@ -202,18 +207,21 @@ After indexing is complete, identify which files need connection hunting:
       "output": "intermediate/connections--src-handlers-ipc-handlers-ts.jsonl"}
    ]
    ```
+5. **Check line counts and flag large files.** For each file in the list, run `wc -l`.
+   Files >1000 lines are flagged as `large` in `.progress.json` (under `large_files`).
+   They ARE still assigned to hunters — hunters now know how to chunk-read large files.
 
 Present summary:
 ```
 Connection Hunting — File Assignments
-=======================================
-Files with connection patterns: {N} out of {total} indexed files
-  Connection hints from tree-sitter: {N} files
-  Grep pattern matches: {N} additional files
-  Skipped (no connection patterns): {N} files
-
-Estimated batches: {ceil(N/5)} (5 agents per batch)
+========================================
+Files ≤1000 lines: {M} (standard hunting)
+Files >1000 lines: {N} (chunked hunting — may produce partial results)
+Total: {M+N}
 ```
+
+**If `assigned_files` was provided:** Skip steps 1-5 above entirely. Use the provided
+file list directly. The orchestrator has already determined which files to hunt.
 
 ### 2b: Spawn Per-File Connection Hunters in Batches
 
@@ -222,8 +230,9 @@ For each file in the connection hunting list:
 1. **Check for existing output.** Skip if the file's JSONL output exists and has a
    summary line (indicating the agent completed).
 2. **Create tasks** for pending files.
-3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE file. Assign
-   them the `feature-inventory:connection-hunter` agent.
+3. **Spawn teammates in batches of up to 10.** Each teammate gets ONE file. Assign
+   them the `feature-inventory:connection-hunter` agent. Connection hunters are lighter
+   than dimension analysts — they read one file and grep, vs. analyzing entire modules.
 4. **Each teammate receives:**
    - The specific file path to hunt connections for
    - The repo path
@@ -243,6 +252,22 @@ For each file in the connection hunting list:
    stays unblocked and processes messages as they arrive. Also pass the team lead name
    to each agent so it knows who to message.
 6. **Batch-level hard stop (every 2 batches).**
+
+> **CRITICAL: Hunt ALL assigned files.** Do NOT skip files, declare diminishing returns,
+> stop based on hint coverage percentages, or mark connection hunting complete until every
+> assigned file has been processed to at least partial status. If you run out of context,
+> update `.progress.json` with exactly which files are done and which are pending, and
+> return — the orchestrator will re-spawn you for the remaining files.
+
+### 2b-return: Return Status
+
+build-index returns one of:
+- `INDEXING_COMPLETE` — mechanical indexing done, ready for connection hunting
+- `HUNTING_BATCH_DONE` — processed all assigned files, more files may exist
+- `ENRICHED_INDEX_COMPLETE` — all files hunted, merge done, ready for Phase 2
+
+When `assigned_files` was provided, return `HUNTING_BATCH_DONE` after processing all
+assigned files. The calling orchestrator tracks overall completion.
 
 ### 2c: Merge Connections into SQLite
 

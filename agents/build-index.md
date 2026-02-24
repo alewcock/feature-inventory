@@ -102,11 +102,11 @@ After all indexing teammates complete:
    -- Every NULL callee_id is a gap — the call goes somewhere tree-sitter can't see.
    -- NO FILTERING. console.log → Browser Console. .forEach(cb) → callback target.
    -- Connection hunters resolve each one.
-   INSERT INTO connection_hints (type, file, line, expression, note, resolved)
+   INSERT INTO connection_hints (hint_type, file, line, pattern, context, resolved, repo)
    SELECT 'dead_end', c.call_file, c.call_line, c.callee_name,
           'Unresolved call to ' || c.callee_name
-            || ' from ' || COALESCE(s.qualified_name, s.name, 'unknown'),
-          0
+            || ' from ' || COALESCE(s.name, 'unknown'),
+          0, c.repo
    FROM calls c
    LEFT JOIN symbols s ON c.caller_id = s.id
    WHERE c.callee_id IS NULL;
@@ -115,16 +115,16 @@ After all indexing teammates complete:
    -- Every zero-caller symbol is either dead code (valid finding) or called through
    -- an indirect mechanism the indexer missed (a missing connection to find).
    -- NO FILTERING. Connection hunters resolve each one.
-   INSERT INTO connection_hints (type, file, line, expression, note, resolved)
-   SELECT 'dead_start', s.file, s.line_start, s.name,
-          'Never called: ' || s.type || ' ' || COALESCE(s.qualified_name, s.name),
-          0
+   INSERT INTO connection_hints (hint_type, file, line, pattern, context, resolved, repo)
+   SELECT 'dead_start', s.file, s.line, s.name,
+          'Never called: ' || s.kind || ' ' || s.name,
+          0, s.repo
    FROM symbols s
    WHERE s.caller_count = 0;
    ```
 5. **Verify counts:** `SELECT COUNT(*) FROM symbols`, `SELECT COUNT(*) FROM calls`,
-   `SELECT COUNT(*) FROM connection_hints WHERE type = 'dead_end'`,
-   `SELECT COUNT(*) FROM connection_hints WHERE type = 'dead_start'`, etc.
+   `SELECT COUNT(*) FROM connection_hints WHERE hint_type = 'dead_end'`,
+   `SELECT COUNT(*) FROM connection_hints WHERE hint_type = 'dead_start'`, etc.
 
 **This merge can be done by the orchestrator** using Python's built-in `sqlite3` module
 via the Bash tool:
@@ -300,10 +300,10 @@ assigned files. The calling orchestrator tracks overall completion.
 Query `graph.db` to check:
 
 ```sql
-SELECT type, COUNT(*) as remaining
+SELECT hint_type, COUNT(*) as remaining
 FROM connection_hints
-WHERE resolved = 0 AND type IN ('dead_end', 'dead_start')
-GROUP BY type;
+WHERE resolved = 0 AND hint_type IN ('dead_end', 'dead_start')
+GROUP BY hint_type;
 ```
 
 If this returns any rows, Phase 1 is incomplete. The orchestrator must:
@@ -311,7 +311,7 @@ If this returns any rows, Phase 1 is incomplete. The orchestrator must:
    ```sql
    SELECT DISTINCT file, COUNT(*) as unresolved_count
    FROM connection_hints
-   WHERE resolved = 0 AND type IN ('dead_end', 'dead_start')
+   WHERE resolved = 0 AND hint_type IN ('dead_end', 'dead_start')
    GROUP BY file
    ORDER BY unresolved_count DESC;
    ```
@@ -393,17 +393,17 @@ SELECT COUNT(*) FROM file_manifest WHERE status != 'done';
 SELECT COUNT(*) FROM symbols WHERE caller_count > 0;
 
 -- Step 1c.4: Have graph-derived hints been generated?
-SELECT COUNT(*) FROM connection_hints WHERE type IN ('dead_end', 'dead_start');
+SELECT COUNT(*) FROM connection_hints WHERE hint_type IN ('dead_end', 'dead_start');
 
 -- Step 2: How many hints remain unresolved?
-SELECT type, COUNT(*) FROM connection_hints WHERE resolved = 0 GROUP BY type;
+SELECT hint_type, COUNT(*) FROM connection_hints WHERE resolved = 0 GROUP BY hint_type;
 
 -- Step 2: Which files still need hunting?
 SELECT DISTINCT file FROM connection_hints WHERE resolved = 0;
 
 -- Completion gate: ready for Phase 2?
 SELECT COUNT(*) FROM connection_hints
-WHERE resolved = 0 AND type IN ('dead_end', 'dead_start');
+WHERE resolved = 0 AND hint_type IN ('dead_end', 'dead_start');
 -- Must be 0 to pass.
 ```
 

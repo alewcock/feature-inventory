@@ -1,13 +1,15 @@
 ---
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Agent, TeamCreate, TaskCreate, TaskUpdate, TaskList, SendMessage
 description: >
-  Systematically reverse-engineer every feature, behavior, and capability across one or
-  more codebases. Produces a deeply decomposed, hierarchically structured reference
-  designed for AI/agent teams to implement a complete rebuild. Interviews the user to
-  resolve ambiguity. REQUIRES Agent Teams to be enabled. Run: /feature-inventory [path]
+  Graph-based feature inventory pipeline. Builds a code reference index, hunts for indirect
+  connections, constructs an outcome graph, annotates pathways with dimensions, and derives
+  features from outcomes. Produces the same feature detail files as /feature-inventory:create
+  but discovers features bottom-up from the code graph rather than top-down from dimension
+  analysis. REQUIRES Agent Teams to be enabled.
+  Run: /feature-inventory:create [path]
 ---
 
-# Feature Inventory - Orchestrator
+# Feature Inventory (Graph Pipeline) - Orchestrator
 
 ## PREREQUISITE: Agent Teams Required
 
@@ -18,10 +20,6 @@ description: >
 
    > **This plugin requires Claude Code Agent Teams.**
    >
-   > Agent Teams enables parallel analysis across 9 dimensions of your codebase,
-   > which is essential for completing the inventory in a reasonable time and
-   > within context window limits.
-   >
    > To enable, add to `~/.claude/settings.json`:
    > ```json
    > {
@@ -30,1169 +28,445 @@ description: >
    >   }
    > }
    > ```
-   > Then restart Claude Code and run `/feature-inventory` again.
+   > Then restart Claude Code and run the command again.
 
-   **Do not proceed. Do not fall back to sequential subagents.** The plugin is
-   designed around Agent Teams' parallel execution, shared task lists, and
-   inter-teammate messaging. Without it, dimension analysis would exhaust the
-   context window before completing.
+   **Do not proceed. Do not fall back to sequential subagents.**
 
 3. Also verify you have access to the `TeamCreate` tool. If you attempt to call it
    and it's not available, stop with the same error message above.
 
 ---
 
-You are the orchestrator for a comprehensive product reverse-engineering effort. Your
-purpose is to produce a specification so complete and deeply decomposed that an AI/agent
-team could rebuild the entire product from your output alone, without access to the
-original source code.
+You are the orchestrator for a graph-based product reverse-engineering effort. Unlike the
+dimension-analysis approach, this pipeline discovers features BOTTOM-UP.
 
-**Nothing is too small.** A tooltip, a default sort order, a 3-line validation rule, a
-retry delay on a queue worker, a CSS breakpoint, an error message string, a pagination
-default - everything matters. If the product exhibits it as behavior, it belongs in the
-inventory.
+## Graph Pipeline Phase Mapping
 
-**The output is for machines.** Every detail file you produce will be handed to an AI
-agent as its implementation specification. Structure accordingly: precise, unambiguous,
-with complete schemas, types, rules, and edge cases. No hand-waving.
+This command executes the graph pipeline phases as follows:
+
+- **Phase 1: Discovery + Index** = Steps 1-3 (discovery, planning, enriched indexing)
+- **Phase 2: Graph Construction** = Step 4
+- **Phase 3: Pathway Annotation** = Step 5
+- **Phase 4: Feature Derivation** = Step 6
+
+Step 0 (user interview) is a prerequisite input-gathering step used by all phases.
+
+Pipeline flow:
+
+1. **Discover and plan** repositories, modules, and teammate splits
+2. **Index** every symbol in the codebase (mechanical, exhaustive)
+3. **Hunt** for every indirect connection (events, IPC, pub/sub, reactive chains, etc.)
+4. **Build** the outcome graph (entry points → pathways → final outcomes)
+5. **Annotate** each pathway with dimensional information (data, auth, logic, UI, config, side effects)
+6. **Derive** features from annotated pathways (cluster, name, describe, link)
+
+The result is the same feature hierarchy (F-001.md, F-001.01.md, F-001.01.01.md) but
+discovered from what the code DOES (outcomes) rather than how it's structured (dimensions).
+This produces outcome-focused features that free the re-implementor from replicating
+the legacy architecture.
 
 ## Important: Context Window Management
 
-**A "prompt is too long" error is CATASTROPHIC.** It kills the orchestrator session,
-orphans any running teammates, and loses all context accumulated during the run. This
-workflow spans many steps and can run for hours — the orchestrator MUST proactively
-manage its context to prevent this.
-
-### Core Rules
-
-1. **Never load entire codebases into context.** Use `Grep`, `Glob`, and targeted `Read`
-   to sample and scan. Delegate deep analysis to sub-agents.
-2. **Each sub-agent gets ONE analysis dimension per repo (or per module for large repos).**
-   Don't ask an agent to analyze more than one dimension at a time.
-3. **If a repo is very large (>500 files), split the agent's work by directory/module.**
-   Spawn multiple agents for the same dimension, each scoped to a subtree.
-4. **All agents write their findings to disk immediately.** They do NOT return large
-   payloads in conversation. They write to `./docs/features/raw/`.
-5. **Resume capability:** The orchestrator checks for existing output files before
-   spawning agents. If a dimension's output file already exists and is non-empty, skip
-   that agent. This means the user can `/clear` and re-run `/feature-inventory` and it
-   picks up where it left off.
-
-### Batch-Level Hard Stops (Primary Protection)
-
-**During any step that dispatches agent batches (Steps 3, 3.5, 4b), the orchestrator
-MUST perform a hard stop after every 2 completed batches.** This means: save all state
-to `.progress.json`, print a checkpoint message with resume instructions, and **STOP.**
-Do not continue. The user will `/compact` or `/clear` and re-run the command.
-
-This is the most important context management mechanism. See
-`references/context-management.md` § "Batch-Level Hard Stop Protocol" for the full
-procedure. The VS Code context percentage UI does **not** update during a long-running
-turn — the user has zero visibility into context health while the orchestrator is
-running. Hard stops give the user regular opportunities to check and manage context.
-
-### Step-Boundary Checkpoints
-
-**This workflow also has checkpoints at every step boundary.** At each checkpoint, the
-orchestrator MUST evaluate its context health and clear if needed. See
-`references/context-management.md` § "Context Checkpoint Protocol" for the full
-protocol.
-
-Checkpoints are marked with `### Context Checkpoint` headers throughout this document.
-**Do not skip them.** Each checkpoint is a safe resume point — all prior state is on
-disk and the next step can start from those files.
-
-**The orchestrator should expect to `/compact` or `/clear` many times during a full
-inventory run.** This is normal and by design. The alternative — hitting "prompt is
-too long" — is catastrophic and unrecoverable.
-
-### Automated Context Watchdog
-
-A PostToolUse hook (`scripts/context-watchdog.py`) monitors context health in real time.
-It tracks tool call count and transcript size, injecting escalating warnings into the
-orchestrator's context. At critical levels, it BLOCKS agent-spawning tools (TaskCreate,
-TeamCreate, SendMessage) to prevent starting work that will be lost.
-
-**If you see a watchdog warning, treat it like a fire alarm.** Save state and checkpoint.
-See `references/context-management.md` § "Context Watchdog" for details.
-
-### Orchestrator Progress File
-
-Maintain `./docs/features/.progress.json` throughout the workflow. Update it after every
-batch completes. On resume, read it FIRST to know exactly where to pick up. See
-`references/context-management.md` § "Orchestrator Progress File" for the schema.
+**A "prompt is too long" error is CATASTROPHIC.** Follow the same context management
+protocols as the standard create pipeline. See `references/context-management.md` for:
+- **CRITICAL: /clear kills in-process agents** — never clear while agents are running
+- Batch-level hard stops (every 2 batches)
+- Step-boundary checkpoints
+- Context watchdog integration
+- Orchestrator progress file
 
 ## Step 0: User Interview
 
-Before touching any code, interview the user. Legacy products carry decades of implicit
-knowledge that is not in the code. This step captures it.
+**Identical to the standard pipeline.** Interview the user to understand the product,
+its major functional areas, tech stack, external services, and tribal knowledge.
 
-If `./docs/features/interview.md` already exists, read it, summarize what
-you already know, and ask only if there are gaps. Don't re-interview.
+If `./docs/features/interview.md` already exists, read it, summarize what you already
+know, and ask only if there are gaps. Don't re-interview.
 
-Be conversational. Adapt follow-up questions based on their answers. When something is
-ambiguous or surprising, dig in. The goal is to understand the product the way a senior
-engineer who's worked on it for years would.
-
-### Required Questions
-
-1. **What does this product do?** One paragraph overview. What problem does it solve,
-   who uses it, what's the core workflow?
-
-2. **What are the major functional areas?** Ask them to list the top-level features
-   as they think of them (e.g., "User management, billing, reporting, inventory
-   tracking, notifications"). This becomes your initial feature map to validate against
-   the code.
-
-3. **What are the repositories / codebases involved?** Paths, what each one covers,
-   how they relate. If they've provided a path already, confirm what's in it.
-
-4. **What's the tech stack?** Languages, frameworks, databases, message queues,
-   hosting. This helps agents know what patterns to look for.
-
-5. **Are there any areas of the product that are:**
-   - Particularly complex or subtle? (Business rules that took years to get right)
-   - Deprecated but still running? (Features nobody uses but the code is still live)
-   - Undocumented or only understood by specific people?
-   - Known to be buggy or inconsistent? (So we capture intended behavior, not just
-     what the code happens to do)
-
-6. **What user roles exist?** Admins, regular users, API consumers, internal tools users,
-   etc.
-
-7. **Are there multiple tenants, organizations, or environments** that affect behavior?
-
-8. **What external services does the product depend on?** Payment processors, email
-   providers, analytics, CRMs, etc.
-
-9. **Is there anything the code does that you'd want done differently in the rebuild?**
-   (Not to change the inventory, but to annotate migration notes.)
-
-10. **Is there anything NOT in the code that's important?** Manual processes,
-    workarounds, tribal knowledge, external scripts, database jobs defined outside
-    the codebase, etc.
-
-Save answers to `./docs/features/interview.md` and the user-provided
-feature map to `./docs/features/user-feature-map.md`.
-
-### Handling Ambiguity During Analysis
-
-Throughout Steps 3-4, agents will flag ambiguities with `[AMBIGUOUS]` tags.
-The orchestrator should:
-1. Collect these as they accumulate.
-2. Present them to the user in batches of 5-10 at natural pause points.
-3. Save resolved answers to `./docs/features/clarifications.md`.
-4. Feed resolutions back to agents if re-running.
+Save answers to `./docs/features/interview.md` and the user-provided feature map to
+`./docs/features/user-feature-map.md`.
 
 ### Context Checkpoint: After Interview
 
 **MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
 
-All interview state is on disk (`interview.md`, `user-feature-map.md`). If the interview
-was lengthy (many follow-up questions, complex product), context may already be significant.
-Evaluate and clear if needed — Step 1 resumes from `discovery.json` detection.
+## Step 1: Discovery (Phase 1)
 
-Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`
+**Identical to the standard pipeline.** Scan the codebase to identify repositories,
+languages, frameworks, size, module structure, and vendor/generated code patterns.
 
-## Step 1: Discovery
-
-Determine what you're working with:
-
-1. If a path argument was provided, use it. Otherwise use the current working directory.
-2. Identify all repositories/codebases:
-   - If the path IS a repo (has .git, package.json, Cargo.toml, *.sln, etc.), treat it as a single repo.
-   - If the path CONTAINS multiple repos, list them all.
-3. For each repo, do a quick structural scan:
-   - Count files by extension (use `find` + `wc`, don't enumerate)
-   - Identify primary languages and frameworks
-   - Identify the rough module/directory structure (top 2 levels)
-   - Estimate size category: small (<100 files), medium (100-500), large (500-2000), massive (>2000)
-4. Write discovery results to `./docs/features/discovery.json`
-5. Cross-check discovery against the user's interview answers. If there are repos or
-   components they didn't mention, ask about them.
+Write discovery results to `./docs/features/discovery.json`.
 
 ### Context Checkpoint: After Discovery
 
 **MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
 
-Discovery results are on disk (`discovery.json`). If the codebase was large and required
-extensive structural scanning, clear before planning. Step 2 resumes from `plan.json`
-detection.
+## Step 2: Plan (Phase 1)
 
-Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`, `discovery.json`
-
-## Step 2: Plan
-
-Based on discovery AND the user interview, create an analysis plan.
+Based on discovery AND the user interview, create an analysis plan tailored for the
+graph pipeline. The plan determines how to split the indexing and connection-hunting
+work across agent teams.
 
 ```json
 {
+  "pipeline": "graph",
   "repos": [
     {
       "name": "repo-name",
       "path": "/absolute/path",
-      "languages": ["typescript", "python"],
-      "frameworks": ["express", "react"],
-      "size": "medium",
-      "modules": ["src/auth", "src/billing", "src/core"],
-      "dimensions_to_analyze": [
-        {"dimension": "api-surface", "scope": "full", "split_by_module": false},
-        {"dimension": "data-models", "scope": "full", "split_by_module": false},
-        {"dimension": "ui-screens", "scope": "full", "split_by_module": true},
-        {"dimension": "business-logic", "scope": "src/services,src/domain", "split_by_module": true},
-        {"dimension": "integrations", "scope": "full", "split_by_module": false},
-        {"dimension": "background-jobs", "scope": "full", "split_by_module": false},
-        {"dimension": "auth-and-permissions", "scope": "full", "split_by_module": false},
-        {"dimension": "configuration", "scope": "full", "split_by_module": false},
-        {"dimension": "events-and-hooks", "scope": "full", "split_by_module": false}
-      ]
+      "languages": ["typescript", "csharp"],
+      "frameworks": ["express", "react", "electron"],
+      "size": "large",
+      "modules": ["src/main", "src/renderer", "src/shared"],
+      "indexing_splits": [
+        {
+          "scope": "src/main",
+          "estimated_files": 45,
+          "estimated_lines": 8500,
+          "output": "intermediate/index--main.jsonl"
+        },
+        {
+          "scope": "src/renderer",
+          "estimated_files": 78,
+          "estimated_lines": 15200,
+          "output": "intermediate/index--renderer.jsonl"
+        },
+        {
+          "scope": "src/shared",
+          "estimated_files": 23,
+          "estimated_lines": 4100,
+          "output": "intermediate/index--shared.jsonl"
+        }
+      ],
+      "connection_hunting_strategy": "per_file",
+      "connection_hunting_note": "File assignments determined after indexing (Step 3d) by querying connection_hints table and grepping for connection patterns. Each agent gets ONE file."
     }
-  ]
-}
-```
-
-Skip dimensions that clearly don't apply.
-
-### Exclude Patterns and Vendor Discovery
-
-During discovery, identify third-party libraries, vendor directories, auto-generated
-code (`.Designer.cs`, generated proxies), and libraries duplicated across subprojects.
-Record these as `exclude_patterns` in `plan.json`. The coverage audit script uses these
-to skip files the product doesn't own.
-
-Also identify paths that are duplicated across subprojects (e.g., shared library copies).
-Record these as `deduplicate_paths` so the audit only checks one copy.
-
-```json
-{
-  "repos": [...],
-  "exclude_patterns": [
-    "node_modules", "cef_binary", "baseclasses", "FFDShowAPI",
-    "NotifyIconWpf", "gong-wpf-dragdrop", ".Designer.cs",
-    "Properties/Resources", "ns-eel2", "Wasabi/"
   ],
-  "deduplicate_paths": [
-    "Shared library copies that exist in multiple subprojects — only audit one copy"
-  ]
+  "exclude_patterns": ["node_modules", "vendor", ".Designer.cs"]
 }
 ```
 
 ### Splitting Strategy
 
-Splitting is critical to prevent context exhaustion AND to keep teammate runtime short.
-A single agent cannot adequately analyze thousands of lines of source code — it will
-triage and produce shallow stubs. Long-running teammates also risk their own context
-limits and delay the overall workflow.
+**Target: each teammate should complete in ~5 minutes.**
 
-**Target: each teammate should complete in ~5 minutes.** If a task would take longer,
-split it further. More smaller tasks = more frequent progress saves, less work lost
-on failure, and faster batch turnaround for the orchestrator.
+For indexing:
+- Split by module/directory, aiming for ~5,000-10,000 lines per teammate.
+- Very large files (>1,000 lines) get their own dedicated indexing task.
 
-Apply these rules:
-
-1. **Per-module split** (`split_by_module: true`): For repos with >500 source files OR
-   any dimension where the relevant source directories total >1,500 lines, split into
-   separate agent tasks per top-level module/directory.
-
-2. **Per-file split**: After identifying the files each agent will analyze, check file
-   sizes. Any individual source file >500 lines gets its own dedicated agent task:
-   ```json
-   {
-     "dimension": "ui-screens",
-     "scope": "src/js/remote/ControlCenter.js",
-     "split_by_module": false,
-     "reason": "Single file, 1433 lines"
-   }
-   ```
-
-3. **Max scope per teammate**: No single teammate task should cover more than ~1,500
-   lines of source code. If a module or directory exceeds this, split it further by
-   subdirectory or by file groups. Two teammates covering 750 lines each produce
-   better output — and finish faster — than one teammate covering 1,500 lines.
-
-4. **Estimating scope**: During discovery (Step 1), collect line counts per directory.
-   Use these to make splitting decisions. When in doubt, split more aggressively —
-   two agents covering 500 lines each produce better output than one agent triaging
-   1,000 lines.
-
-4. **Minimum analysis depth**: Record the total source lines each agent will cover in
-   `plan.json`. This is used by the coverage audit in Step 3.5.
-
-```json
-{
-  "dimension": "ui-screens",
-  "scope": "src/js/remote/pages",
-  "split_by_module": false,
-  "estimated_source_lines": 4200,
-  "files": ["MusicPage.js", "PromotePage.js", "SettingsPage.js", "..."]
-}
-```
-
-5. **Enumerate and assign every file.** After splitting by module, verify that every
-   source file >100 lines in the repo is assigned to exactly one agent task. Build
-   a file-to-task mapping and include it in `plan.json`:
-
-   ```json
-   "file_assignments": {
-     "src/js/remote/shared/programs.js": "ui-screens--shared",
-     "src/js/remote/shared/content_button_group.js": "ui-screens--shared",
-     "src/js/remote/shared/playlist_items_ui.js": "ui-screens--shared-large",
-   }
-   ```
-
-   Files not assigned to any task are audit gaps by definition. Catch them during
-   planning, not during the audit.
-
-6. **Shared/cross-cutting directories get their own agent tasks.** Directories like
-   `shared/`, `lib/`, `utils/`, `helpers/`, `common/` contain code used across multiple
-   features but owned by no single page or dimension. These MUST get dedicated agent
-   tasks — they should never be left for a page-level agent to "pick up in passing."
-
-   For example, `src/js/remote/shared/` and `src/js/shared/` each get at least one
-   dedicated `ui-screens` and/or `business-logic` agent task.
+For connection hunting:
+- Split by FILE, not by connection type. Each agent gets ONE file and hunts for
+  ALL connection types in or out of that file. The agent knows exactly what strings
+  to Grep for (event names, channel names, topic strings) so cross-module matching
+  is fast — bounded by the patterns in that one file, not by scanning the entire
+  codebase for every pattern category.
+- File assignments are determined AFTER indexing completes (Step 3d), by querying
+  the `connection_hints` table and grepping for known connection patterns. Only files
+  with connection patterns get an agent — pure logic files are skipped.
+- Connections span files and will be discovered from both ends (the emitter file's
+  agent and the listener file's agent). The merge step deduplicates.
 
 Write to `./docs/features/plan.json`.
 
 ### Context Checkpoint: After Planning
 
-**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Step 3 (indexing) is context-intensive.
 
-The analysis plan is on disk (`plan.json`). Step 3 (agent team execution) is the most
-context-intensive phase — monitoring batches of teammates will rapidly consume context.
-**Strongly recommend clearing here** to enter Step 3 with maximum headroom.
+## Step 3: Build Enriched Index (Phase 1)
 
-Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
-`discovery.json`, `plan.json`
+This step produces the enriched code reference index in two phases: mechanical indexing
+(once), then iterative connection hunting in bounded batches.
 
-## Step 3: Execute Analysis via Agent Teams
+**Tree-sitter is REQUIRED for Phase 1 mechanical indexing.** Do not run Phase 1 with
+regex/manual extraction fallbacks. If tree-sitter tooling or grammars are unavailable,
+stop and report the prerequisite failure instead of continuing with degraded indexing.
 
-Create an Agent Team for the analysis. You (the lead) coordinate. Teammates do the
-analysis in parallel.
+**Together, Steps 1-3 complete Graph Pipeline Phase 1 (Discovery + Index).**
 
-### 3a: Create the Team
+### Delegation Model
 
-Use `TeamCreate` to create a team named "feature-inventory". Enable delegate mode
-(Shift+Tab) so you focus on coordination, not direct analysis.
-
-### 3b: Spawn Teammates in Batches
-
-For each repo and each dimension in the plan:
-
-1. **Check for existing output:** If `./docs/features/raw/{repo-name}/{dimension}.md`
-   (or `{dimension}--{module}.md` for split analyses) exists and is non-empty, skip it.
-2. **Create tasks** via `TaskCreate` for each pending dimension.
-3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE dimension for ONE
-   repo (or one module chunk if split by module). Assign them the corresponding agent:
-   - `feature-inventory:api-analyzer` - api-surface
-   - `feature-inventory:data-model-analyzer` - data-models
-   - `feature-inventory:ui-analyzer` - ui-screens
-   - `feature-inventory:logic-analyzer` - business-logic
-   - `feature-inventory:integration-analyzer` - integrations
-   - `feature-inventory:jobs-analyzer` - background-jobs
-   - `feature-inventory:auth-analyzer` - auth-and-permissions
-   - `feature-inventory:config-analyzer` - configuration
-   - `feature-inventory:events-analyzer` - events-and-hooks
-4. **Each teammate receives** via its task description:
-   - The repo path and scope
-   - The output file path
-   - The product context from `interview.md` (brief summary only)
-   - A pointer to read `references/context-management.md` before starting
-   - This instruction verbatim: **"Be exhaustive. No behavior is too small. Capture
-     every default value, every edge case, every validation rule, every error message,
-     every timeout, every sort order, every conditional branch. If you can see it in the
-     code, document it. Flag anything ambiguous with [AMBIGUOUS]. This output will be
-     the sole reference for an AI agent team rebuilding this feature from scratch.
-     IMPORTANT: Write findings to disk every 5-10 items — never accumulate more than
-     10 items before writing. If you crash, only the unwritten items should be lost."**
-5. **Wait for the batch to finish** before spawning the next batch.
-6. **Update `.progress.json`** after each batch completes with the list of completed
-   and pending dimensions.
-7. **Batch-level hard stop (every 2 batches).** After completing every 2nd batch,
-   the orchestrator MUST perform a hard stop. See `references/context-management.md`
-   § "Batch-Level Hard Stop Protocol" for the full procedure. In brief:
-   - Update `.progress.json` with all completed/pending/failed dimensions
-   - Verify all output files from completed batches exist and are non-empty
-   - Print the batch checkpoint message (completed count, remaining count,
-     resume instructions)
-   - **STOP.** Do not start the next batch. Do not continue any other work.
-   - The user will `/compact` or `/clear` and re-run. The command resumes from
-     `.progress.json` at the next batch.
-
-   **This is not optional.** A codebase with 100+ agent tasks across 20 batches will
-   exhaust context long before all batches complete if the orchestrator runs
-   continuously. The 2-batch cadence ensures the user can manage context health.
-
-Use Sonnet for teammates where possible to manage token costs. The lead (Opus) handles
-coordination and the final merge/index generation.
-
-### 3c: Monitor and Collect Ambiguities
-
-While teammates work:
-1. Monitor progress via `TaskList`.
-2. When teammates flag `[AMBIGUOUS]` items (via `SendMessage` or in their output files),
-   collect them.
-3. After each batch completes, verify output files exist and are non-empty.
-4. **Update `.progress.json`** with completed/pending/failed dimensions.
-5. Present ambiguities to the user in batches of 5-10 for resolution.
-6. Save resolutions to `./docs/features/clarifications.md`.
-
-### 3d: Handle Failures
-
-If a teammate fails (empty output, error, or context exhaustion):
-1. Log the failure.
-2. Check if the output file has partial content (the teammate writes incrementally).
-3. If partial content exists: note the `## INCOMPLETE` marker for a follow-up pass.
-4. If empty: re-queue the dimension for the next batch.
-5. After all batches complete, do a cleanup pass: re-spawn teammates for any
-   failed/incomplete dimensions.
-
-### Context Checkpoint: After Analysis Execution
-
-**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
-in `references/context-management.md`.
-
-Step 3 involves monitoring multiple batches of teammates, collecting ambiguities, handling
-failures, and re-queuing — this is the single largest context consumer in the entire
-workflow. After completing Step 3, the orchestrator's context is almost certainly heavy.
-
-**Clear here.** All analysis output is on disk in `raw/`. The coverage audit (Step 3.5)
-starts fresh from those files.
-
-Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
-`discovery.json`, `plan.json`, `raw/*` (all dimension outputs)
-
-## Step 3.5: Structural Coverage Audit (Mandatory — Blocks Step 4)
-
-**This step is automated and mandatory.** Do NOT skip it. Do NOT proceed to Step 4
-until every gap identified here is resolved.
-
-The raw analysis may have covered some source files thoroughly and others barely at all.
-This step catches the gaps before synthesis, when they're cheapest to fix.
-
-Unlike a simple filename-mention check, this audit **extracts actual code elements**
-(functions, classes, routes, handlers, etc.) from every source file and verifies that
-each element appears in the analysis output. A 90-line file with 8 business rules gets
-8 things to check. A 2000-line file that's mostly boilerplate gets checked for only the
-handful of things that actually matter.
-
-The audit also **detects shared infrastructure** — elements defined in one file but called
-from multiple distinct files. These are candidates for the purpose audit in Step 4.5,
-which verifies that each calling context is represented as a distinct feature.
-
-### 3.5a: Run the Structural Coverage Audit
-
-Execute the scripted audit:
-
-```bash
-python3 {plugin_path}/scripts/coverage-audit.py \
-  --plan ./docs/features/plan.json \
-  --raw-dir ./docs/features/raw \
-  --details-dir ./docs/features/details \
-  --output ./docs/features/coverage-audit.json
+```
+create orchestrator (you)
+  ├── spawns build-index (mechanical indexing — once)
+  └── connection hunting loop:
+      ├── spawns 2× build-index in parallel (each with 20 files)
+      ├── collects results, updates .progress.json
+      ├── hard stop → user /clears → re-runs
+      └── repeat until all files hunted
 ```
 
-The script:
-1. Enumerates ALL source files from each repo's filesystem (not from plan.json file lists)
-2. Excludes paths matching `plan.json.exclude_patterns`
-3. **Extracts named code elements** from each file using language-aware regex:
-   functions, classes, methods, routes, handlers, structs, interfaces, etc.
-4. Builds an identifier index of all raw/ and details/ analysis output
-5. **Checks each extracted element** for presence in the analysis — not line counts,
-   not filename mentions, but whether each actual function/class/route was documented
-6. Classifies files by element coverage:
-   - ADEQUATE: >= 60% of elements found in analysis
-   - SHALLOW: some elements found but < 60%
-   - MISSING: zero elements found and filename not mentioned
-7. Classifies gaps by severity: CRITICAL (large files or many missing elements),
-   IMPORTANT (moderate gaps), MINOR (few missing elements), TEST (test files)
-8. **Detects shared elements**: functions/methods referenced from 2+ other files.
-   These are output in `coverage-audit.json` under `shared_elements` for the
-   purpose audit in Step 4.5.
-9. Writes `coverage-audit.json` with full gap list, triage summary, and shared elements
-10. Exits non-zero if any gaps found
+**Do NOT "read and follow" build-index.md yourself.** Spawn it as **foreground Task
+agents** using the `feature-inventory:build-index` command. Each gets its own context
+window.
 
-**The orchestrator does NOT interpret the audit — it reads the script's JSON output.**
+### Phase A — Mechanical Indexing (once)
 
-### 3.5b: Triage Gaps
+Spawn one build-index Task for tree-sitter indexing. Pass it `plan.json`, `graph.db`,
+repo paths, `discovery.json`, and a brief product context from the interview. Do NOT
+pass `assigned_files` — this triggers the full indexing flow (Steps 1a-1d in build-index).
 
-Before spawning gap-fill agents, read `coverage-audit.json` and triage the gaps.
+Wait for completion. build-index returns `INDEXING_COMPLETE`.
 
-Each gap now includes `elements_missing` — the specific function/class/route names that
-the analysis failed to cover. This tells the gap-fill agent exactly what to look for.
+### Phase B — Connection Hunting Loop
 
-1. **CRITICAL:** Files with many missing elements or large files with MISSING status.
-   These files contain significant product behavior that the dimension analyzers didn't
-   reach. Must be filled before Step 4.
+After mechanical indexing completes, drive the connection hunting from create
+in a loop:
 
-2. **IMPORTANT:** Files with moderate gaps — some elements covered, others not. The
-   `elements_missing` list tells you exactly which functions/classes were missed.
-   Should be filled before Step 4 if possible.
-
-3. **MINOR:** Files with only 1-2 missing elements. The orchestrator should spot-check
-   these — read the missing elements in the source and verify they're truly meaningful
-   (not just helper functions or trivial wrappers). Accept if they're not feature-relevant.
-
-4. **TEST FILES:** Lower priority. Fill only after CRITICAL and IMPORTANT gaps are
-   resolved. If context/budget is exhausted, mark as "DEFERRED — test coverage."
-
-5. **VENDOR-ADJACENT:** Files that are infrastructure/boilerplate. Spot-check and accept
-   if they're genuinely just wiring.
-
-Present the triage to the user:
-```
-Structural Coverage Audit
-==========================
-Source files scanned: {N} ({total lines})
-Code elements extracted: {N}
-Element coverage: {covered}/{total} elements ({pct}%)
-File-level: {adequate}/{total} files adequately analyzed
-
-Gaps found: {N}
-  CRITICAL:  {N} files — {missing_elements} missing elements
-  IMPORTANT: {N} files — {missing_elements} missing elements
-  MINOR:     {N} files — {N} spot-checked and accepted
-  TEST:      {N} files — deferred
-
-Shared infrastructure elements: {N}
-  (Will be purpose-audited after synthesis in Step 4.5)
-
-Filling {N} gaps in {ceil(N/5)} batches...
-```
-
-### 3.5c: Fill Gaps (with Grouping)
-
-**This is a hard gate.** If there are CRITICAL or IMPORTANT gaps:
-
-1. **Do NOT proceed to Step 4.**
-2. **Include the missing elements in the gap-fill agent's instructions.** Each gap now
-   has an `elements_missing` list — pass these to the agent so it knows exactly what
-   functions/classes/routes to analyze:
+1. **Read `.progress.json`** for the `connection_hunting` section. Get the list of
+   pending files from `intermediate/connection-hunting-files.json`.
+2. **On first iteration:** Spawn one build-index Task WITHOUT `assigned_files` to
+   determine the connection hunting file list (Step 2a). It returns after writing
+   `intermediate/connection-hunting-files.json`. Then read the file list.
+3. **Take the next 40 pending files** from the list.
+4. **Split into 2 chunks of 20.** Spawn **2 parallel build-index Tasks**, each with:
+   - `assigned_files`: their 20 files
+   - `max_files: 20`
+   - All standard paths (`plan.json`, `graph.db`, repo path, etc.)
+   Each build-index creates its own team with a unique name (e.g.,
+   `fi-hunt-batch-A-{N}`, `fi-hunt-batch-B-{N}` where N is the loop iteration).
+   Each spawns up to 10 hunters in batches within its context window.
+5. **Wait for both to complete.** Each returns `HUNTING_BATCH_DONE`.
+6. **Update `.progress.json`** — move hunted files from pending to completed/partial.
+7. **If more pending files remain** → present a **hard stop checkpoint**:
    ```
-   scope: "src/js/remote/ControlCenter.js"
-   output_path: "raw/{repo-name}/ui-screens--ControlCenter.md"
-   missing_elements: ["togglePanel", "handleButtonPress", "CustomButtonConfig"]
-   instruction: "Focus on these specific elements that were missed in the initial
-   analysis. Document each one exhaustively: what it does, its inputs/outputs,
-   business rules, edge cases, error handling, and how it connects to the rest
-   of the system."
+   Connection Hunting Progress
+   =============================
+   Completed: {done} / {total} files
+   Remaining: {remaining} files
+   Next batch: {min(40, remaining)} files
+
+   ⚠ CONTEXT CHECKPOINT — /clear recommended before continuing.
+   Re-run /feature-inventory:create to resume from here.
    ```
-3. **Group related files for the same agent.** When multiple gap files are in the same
-   directory or clearly related (e.g., `asyncio.cpp` + `asyncio.h`, or
-   `ScheduleRenderer.cs` + `ScheduleOptimizer.cs`), assign them to the same gap-fill
-   agent rather than one agent per file.
-4. Spawn gap-filling teammates in batches of up to 5.
-5. **Batch-level hard stop applies here too.** Gap-fill batches count toward the
-   2-batch cadence. If this is the 2nd batch since the last hard stop (including
-   batches from Step 3), perform the hard stop procedure. See
-   `references/context-management.md` § "Batch-Level Hard Stop Protocol."
-6. After gap-fill agents complete, **re-run the coverage audit script** (go back to 3.5a).
+8. **When all files are done** → spawn one final build-index Task for merge/validate/
+   enrich (Steps 2c-2e). It returns `ENRICHED_INDEX_COMPLETE`.
 
-### 3.5d: Cap Gap-Fill Cycles
+### Phase B — Resume Behavior
 
-**Maximum 3 gap-fill cycles.** If gaps remain after 3 rounds of:
-  audit → triage → fill → re-audit
-then present remaining gaps to the user:
+On resume (after /clear), check `.progress.json`:
+- If `enriched_index_complete == true` → skip to Step 4
+- If `connection_hunting.pending_count > 0` → continue the loop from step 3
+- If `connection_hunting.pending_count == 0` but `merged_to_sqlite == false` →
+  spawn build-index for merge/validate/enrich
 
-```
-These {N} files still have element coverage gaps after 3 fill cycles.
-Missing elements: {list top 10 missing element names}
+### Context Checkpoint: After Phase 1
 
-This likely means the files contain patterns the analyzer agents
-can't fully decompose (e.g., very large procedural files, generated
-code, dynamic dispatch). Accept remaining gaps? [Y/N]
-```
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Step 4 (graph building) needs headroom.
 
-Only proceed to Step 4 when the coverage report shows 0 gaps, or the orchestrator
-has reviewed and accepted each remaining gap as legitimate, or 3 cycles have been
-exhausted and the user has accepted the remainder.
+Preserved files: everything from previous steps, enriched `graph.db`,
+`intermediate/index--*.jsonl`, `intermediate/connections--*.jsonl`
 
-### 3.5e: Present Audit Summary
+## Step 4: Build Outcome Graph (Phase 2)
 
-Show the user:
+**Spawn a Task agent with subagent_type `feature-inventory:build-graph`** (same delegation model
+as Step 3 — see "Delegation Model" above for rationale).
 
-```
-Structural Coverage Audit — Complete
-=====================================
-Source files: {N} ({total lines})
-Code elements: {extracted} extracted, {covered} covered ({pct}%)
-Files: {adequate}/{total} adequately analyzed
+This step constructs the outcome graph from the enriched index in `graph.db`: identifies
+entry points and final outcomes, traces pathways between them, validates the graph, and
+interviews the user about orphans, unreachable outcomes, and graph gaps.
 
-Gaps resolved: {filled} in {cycles} fill cycle(s)
-Gaps remaining: {N} (accepted)
+When the Task returns, `graph.db` contains the full outcome graph — entry points,
+pathways, final outcomes, fan-out points — ready for pathway annotation.
 
-Shared infrastructure: {N} elements detected
-  These will be purpose-audited after synthesis (Step 4.5)
-  to verify each calling context is a distinct feature.
+**Do NOT proceed to Step 5 until the build-graph Task returns successfully.**
 
-Proceeding to synthesis.
-```
+### Context Checkpoint: After Phase 2
 
-### Context Checkpoint: After Coverage Audit
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.**
 
-**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
+Preserved files: everything from previous steps + graph tables in `graph.db`
 
-The coverage audit may have involved multiple gap-fill cycles (up to 3), each spawning
-agent batches and re-running the audit script. If ANY gap-fill cycles were needed,
-context is heavy — **clear before Step 4.**
+## Step 5: Annotate Pathways (Phase 3)
 
-Even if no gap-fill was needed, evaluate context from the audit triage and user
-interactions. Step 4 spawns another round of agent teams and must have sufficient headroom.
+**Spawn a Task agent with subagent_type `feature-inventory:annotate-pathways`** (same delegation model).
 
-Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
-`discovery.json`, `plan.json`, `raw/*`, `coverage-audit.json`
+This step annotates every pathway with dimensional information: data, auth, logic, UI,
+config, and side effects — extracted from source code at each pathway step.
 
-## Step 4: Build Feature Hierarchy, Index, and Detail Files
+When the Task returns, `graph.db` contains dimensional annotations on every pathway —
+ready for feature derivation.
 
-This is the most important step and is **parallelized via Agent Teams** just like Step 3.
-The raw dimension files are organized by dimension (API, data models, etc.) but the
-output must be organized by feature. This cross-cutting pivot is too large for a single
-context window — it requires reading from up to 9 dimension files per repo and producing
-hundreds of detail files.
+**Do NOT proceed to Step 6 until the annotate-pathways Task returns successfully.**
 
-### 4a: Build the Feature Map (Orchestrator — lightweight scan)
+### Context Checkpoint: After Phase 3
 
-**Do NOT read all raw files in full.** Instead, skim them to build a mapping of what
-belongs to which feature area.
+**MANDATORY — CLEAR STRONGLY RECOMMENDED.**
 
-1. Read `user-feature-map.md` to get the starting skeleton of feature areas.
-2. For each raw dimension file, read **only the section headers and summary** (first
-   30-50 lines, plus any `## Summary` or `### {Group Name}` headers). Use Grep to
-   extract section headers:
-   ```
-   Grep for: "^##" in each raw file to get all section headings
-   ```
-3. Map each section/group to a major feature area. Build a lightweight mapping:
+Preserved files: everything from previous steps + annotations merged in `graph.db`
 
-Write to `./docs/features/synthesis-plan.json`:
+## Step 6: Derive Features, Build Index & Validate (Phase 4)
 
-```json
-{
-  "feature_areas": [
-    {
-      "id": "F-001",
-      "name": "User Management",
-      "sub_features": [
-        {
-          "name": "User Registration",
-          "section_hints": {
-            "api-surface": ["### Users", "POST /api/users", "POST /api/auth/register"],
-            "data-models": ["### User", "### Account"],
-            "ui-screens": ["### Registration", "### Signup"],
-            "business-logic": ["### Registration", "### User creation"],
-            "auth-and-permissions": ["### Registration", "### Public routes"],
-            "events-and-hooks": ["### user.created", "### user.registered"],
-            "background-jobs": ["### Welcome email"],
-            "integrations": ["### Email provider"],
-            "configuration": ["### Registration", "### SIGNUP_"]
-          }
-        }
-      ]
-    }
-  ]
-}
-```
+**Spawn a Task agent with subagent_type `feature-inventory:derive-features`** (same delegation model).
 
-The `section_hints` are grep patterns / section headers that tell each synthesis
-teammate WHERE to look in each raw file. This prevents teammates from reading entire
-raw files — they can jump to the relevant sections.
+This step clusters pathways into feature areas, spawns feature derivation agents,
+interviews the user for quality resolution, builds the feature index, and validates
+full coverage.
 
-4. Assign hierarchical IDs:
-   - Major features: `F-001`, `F-002`, ...
-   - Sub-features: `F-001.01`, `F-001.02`, ...
-   - (Behavior IDs are assigned by the synthesis teammates during decomposition)
+When the Task returns, the full feature inventory exists: detail files (`F-*.md`),
+navigable index (`FEATURE-INDEX.md`), and machine-readable index (`FEATURE-INDEX.json`).
 
-5. Add any major features discovered in the raw files that the user didn't mention.
-   Cross-reference raw file sections against the user's feature map. Anything unclaimed
-   gets a new feature area or gets assigned to an existing one.
-
-6. **Incorporate shared infrastructure elements.** Read `coverage-audit.json` and check
-   the `shared_elements` list. For elements with high caller counts (3+), note which
-   feature areas their callers belong to. Include these as `shared_infrastructure` hints
-   in the synthesis plan so synthesizer teammates know to trace each shared element to
-   its distinct calling contexts rather than collapsing it into a single generic behavior:
-
-   ```json
-   "shared_infrastructure": [
-     {
-       "element": "StartPlaylist",
-       "defined_in": "src/services/PlaylistService.js",
-       "callers_by_feature": {
-         "F-002": ["src/automation/ScheduleRunner.js"],
-         "F-003": ["src/ui/MusicBrowse.js", "src/ui/SearchResults.js"],
-         "F-005": ["src/ui/ControlCenter.js"]
-       },
-       "note": "Each feature area should have its own behavior for invoking this element, reflecting its specific trigger, context, error handling, and UX."
-     }
-   ]
-   ```
-
-**Context budget for 4a:** This step should use minimal context. You're reading headers,
-not content. The synthesis-plan.json is the handoff to teammates.
-
-### 4b: Synthesize Detail Files via Agent Teams (Parallel)
-
-This mirrors the Step 3 pattern: spawn teammates to do the heavy lifting in parallel.
-Each teammate runs in one of two modes depending on whether prior output exists.
-
-1. **Determine mode for each feature area:**
-   - If `./docs/features/details/{feature_id}.md` does NOT exist:
-     **mode = "create"** — build from scratch.
-   - If `./docs/features/details/{feature_id}.md` EXISTS:
-     **mode = "verify"** — audit existing files against raw data and patch gaps.
-
-   **Never skip a feature area.** Even if files exist, they may be incomplete. The
-   verify mode checks them against the raw outputs and fills in what's missing.
-
-2. **Create tasks** via `TaskCreate` for each feature area (all of them).
-
-3. **Spawn teammates in batches of up to 5.** Each teammate gets ONE major feature area.
-   Assign each the `feature-inventory:feature-synthesizer` agent.
-
-4. **Each teammate receives** via its task description:
-   - **`mode`**: `"create"` or `"verify"` (determined in step 1)
-   - The feature ID, name, and sub-feature list from synthesis-plan.json
-   - The section_hints for each sub-feature (so they know where to look in raw files)
-   - The raw output path and list of repos
-   - The detail file output path (`./docs/features/details/`)
-   - The product context (brief summary from interview)
-   - A pointer to read `references/context-management.md` before starting
-   - For **create mode**, this instruction verbatim: **"For each sub-feature, read from
-     ONE raw dimension file at a time using the section hints to find the right
-     location. Extract what you need, then move to the next dimension. After gathering
-     from all dimensions, write the sub-feature detail file and all its behavior detail
-     files. Write each file IMMEDIATELY — do not accumulate. Decompose to atomic
-     behaviors: every validation rule, every error path, every side effect, every
-     default value is its own behavior. If the raw data describes 12 distinct things
-     in a flow, that's 12 behaviors, not 1."**
-   - For **verify mode**, this instruction verbatim: **"Existing detail files were
-     produced by a previous run and may be incomplete. For each sub-feature: read the
-     existing detail file, then cross-check it against EVERY raw dimension file using
-     the section hints. Find gaps: missing entities, missing endpoints, missing business
-     rules, missing events, missing config, missing behaviors. Patch the gaps using
-     Edit — don't rewrite files from scratch, surgically add what's missing. Create
-     new behavior files for any behaviors found in the raw data that have no
-     corresponding detail file. Every validation rule, error path, side effect, and
-     default value should have its own behavior file."**
-
-5. **Wait for each batch to finish** before spawning the next.
-
-6. **Batch-level hard stop (every 2 batches).** After completing every 2nd batch
-   of synthesis work, perform the hard stop procedure. See
-   `references/context-management.md` § "Batch-Level Hard Stop Protocol."
-   Update `.progress.json` with completed/pending features and the current batch
-   number so the command resumes at the right point.
-
-7. **After each batch:** Verify detail files exist for the completed feature areas.
-   If a teammate failed or produced partial output, re-queue.
-
-### Context Checkpoint: After Synthesis
-
-**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Follow the Context Checkpoint Protocol
-in `references/context-management.md`.
-
-Step 4a-4b involved building the feature map (reading headers from all raw files) and
-monitoring synthesis teammates in batches. This is another heavy context consumer.
-
-**Clear here.** All synthesis output is on disk in `details/`. Step 4.5 (resolution
-interview) scans detail files and interacts with the user — it needs headroom.
-
-Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
-`discovery.json`, `plan.json`, `raw/*`, `coverage-audit.json`,
-`synthesis-plan.json`, `details/*`
-
-### 4.5: Purpose Audit & User Resolution (Mandatory — Blocks 4c)
-
-After synthesis, three categories of problems need resolution before the index is built:
-1. **Collapsed purposes** — shared infrastructure traced to a single generic behavior
-   instead of distinct features per calling context (detected by purpose audit)
-2. **Quality issues** — thin specs, ambiguities, overlaps, orphans (detected by scanning)
-3. **User knowledge gaps** — things only the user can clarify
-
-#### 4.5a: Run Purpose Audit (Layer 2 — Shared Infrastructure Tracing)
-
-The structural coverage audit (Step 3.5) identified **shared elements** — functions,
-services, and utilities defined in one file but called from multiple distinct files.
-These are candidates for purpose-level verification: did the synthesizer correctly
-trace each shared element to all its distinct user-facing purposes?
-
-**Example:** A `StartPlaylist` function called from a scheduled automation, a music
-browse screen, and a control center button should produce three distinct behaviors
-(one per calling context), not one generic "start playlist" behavior.
-
-1. Read `coverage-audit.json` and extract the `shared_elements` list.
-2. If the list is empty, skip to 4.5b.
-3. **Spawn purpose-auditor teammates in batches of up to 5.** Each teammate gets a
-   subset of shared elements (up to 10 elements per teammate). Assign each the
-   `feature-inventory:purpose-auditor` agent.
-4. **Each teammate receives** via its task description:
-   - Its assigned shared elements (with callers list from coverage-audit.json)
-   - Path to `docs/features/details/` (synthesis output)
-   - Path to `docs/features/raw/` (dimension analysis)
-   - Repo path
-   - Output path: `docs/features/purpose-audit-{batch}.md`
-5. **Batch-level hard stop applies.** Purpose audit batches count toward the 2-batch
-   cadence. See `references/context-management.md` § "Batch-Level Hard Stop Protocol."
-6. After all purpose auditors complete, **collect their findings**:
-   - **COVERED** elements: no action needed
-   - **COLLAPSED** elements: the synthesis has a single generic behavior that needs to
-     be split into purpose-specific behaviors
-   - **PARTIALLY_COVERED** elements: some purposes have behaviors, others are missing
-   - **MISSING** elements: not in synthesis at all
-
-7. **For COLLAPSED and PARTIALLY_COVERED findings**, spawn synthesizer teammates in
-   **verify mode** with specific instructions about the missing purposes:
-   ```
-   mode: "verify"
-   purpose_gaps: [
-     {
-       "element": "StartPlaylist",
-       "defined_in": "src/services/PlaylistService.js",
-       "missing_purposes": [
-         {"context": "Scheduled automation", "callers": ["src/automation/ScheduleRunner.js"]},
-         {"context": "Control center button", "callers": ["src/ui/ControlCenter.js"]}
-       ],
-       "existing_behavior": "F-003.02.01 (generic start playlist)"
-     }
-   ]
-   instruction: "The existing behavior F-003.02.01 describes StartPlaylist generically.
-   Create separate behavior files for each missing purpose. The scheduled automation
-   case likely has different error handling (retry logic, no user feedback) and the
-   control center button case needs UI feedback (button state, loading indicator).
-   Read each caller file to understand its specific context and requirements."
-   ```
-
-8. Present purpose audit summary to the user:
-   ```
-   Purpose Audit (Shared Infrastructure Tracing)
-   ===============================================
-   Shared elements audited: {N}
-   Skipped (not feature-relevant): {N}
-   Fully covered: {N}
-   Collapsed (one behavior, multiple purposes): {N} → being split
-   Partially covered: {N} → missing purposes being added
-   Missing from synthesis: {N} → being added
-
-   {N} new behaviors created to represent distinct purposes.
-   ```
-
-#### 4.5b: Identify Candidates for User Resolution
-
-Scan all detail files produced in 4b (and updated by purpose audit in 4.5a) to find
-items that need user input. A feature is a **resolution candidate** if any of these apply:
-
-1. **Thin spec** — The detail file for a sub-feature has fewer than 10 lines of substantive
-   content (excluding headers, boilerplate, and empty sections). A behavior file with only
-   a name and one sentence of description is thin.
-
-2. **Majority-empty sections** — A sub-feature detail file where 5+ of the 9 dimension
-   sections are empty or contain only "None identified" / "N/A". This suggests the
-   synthesizer couldn't find enough raw data to characterize the feature.
-
-3. **Ambiguity markers** — Any detail file containing `[AMBIGUOUS]` tags that weren't
-   resolved in `clarifications.md` during Step 3.
-
-4. **Overlapping scope** — Two or more sub-features whose descriptions, data models, or
-   API endpoints substantially overlap. Detected by scanning for:
-   - Same entity names appearing in multiple sub-features under different parents
-   - Same API endpoints referenced in multiple sub-features
-   - Near-identical behavior descriptions across features
-
-5. **Orphan behaviors** — Behaviors that reference entities, endpoints, or events not
-   defined in any other feature's detail file. These may be misclassified.
-
-Build a resolution list:
-```json
-{
-  "candidates": [
-    {
-      "type": "thin",
-      "feature_id": "F-003.04",
-      "name": "Report Scheduling",
-      "detail_file": "details/F-003.04.md",
-      "reason": "Only 6 lines of content across 9 dimension sections",
-      "behaviors_affected": ["F-003.04.01", "F-003.04.02"]
-    },
-    {
-      "type": "overlap",
-      "features": ["F-001.03", "F-005.02"],
-      "reason": "Both reference UserPreferences entity and PATCH /api/preferences endpoint",
-      "detail_files": ["details/F-001.03.md", "details/F-005.02.md"]
-    },
-    {
-      "type": "ambiguous",
-      "feature_id": "F-007.01",
-      "name": "Notification Routing",
-      "detail_file": "details/F-007.01.md",
-      "reason": "3 unresolved [AMBIGUOUS] tags",
-      "ambiguities": ["Channel selection logic unclear", "Retry policy not in code", "Priority levels undocumented"]
-    }
-  ]
-}
-```
-
-#### 4.5c: Present Candidates and Interview the User
-
-For each candidate, ask the user a targeted question with three possible outcomes:
-
-**For thin specs:**
-```
-F-003.04 (Report Scheduling) has a thin specification — the automated analysis
-couldn't extract enough detail to make it implementable.
-
-Options:
-  [Define]  — Tell me what this feature does and I'll flesh out the spec
-  [Merge]   — This is actually part of another feature (which one?)
-  [Remove]  — This isn't a real feature / not needed in the rebuild
-```
-
-**For overlapping features:**
-```
-F-001.03 (User Preferences) and F-005.02 (Dashboard Customization) both reference
-the same UserPreferences entity and PATCH /api/preferences endpoint.
-
-Options:
-  [Keep both]   — They're distinct features that share infrastructure
-  [Merge into]  — Combine them (which one is the parent?)
-  [Clarify]     — Let me explain the distinction so you can update the specs
-```
-
-**For ambiguous items:**
-```
-F-007.01 (Notification Routing) has 3 unresolved ambiguities:
-  1. Channel selection logic — how does the system pick email vs push vs SMS?
-  2. Retry policy — what happens when a notification delivery fails?
-  3. Priority levels — are there priority tiers? How do they affect delivery?
-
-Please answer what you can. Say "skip" for any you're unsure about.
-```
-
-**For orphan behaviors:**
-```
-F-004.02.03 (Archive Audit Log Entry) references an AuditLog entity that
-doesn't appear in any other feature's data model.
-
-Options:
-  [Assign]  — It belongs under feature ___ (tell me which)
-  [Define]  — It's a real entity, let me describe it
-  [Remove]  — It's dead code / not needed
-```
-
-#### 4.5d: Apply Resolutions
-
-For each user response:
-
-- **Define**: Take the user's explanation and use it to rewrite or enrich the detail
-  file(s) and their behavior files. Use `Edit` to surgically update — don't regenerate
-  from scratch. Add the user's context to the appropriate dimension sections.
-
-- **Merge**: Combine the features:
-  1. Pick the surviving feature ID (user chooses, or use the one with more content).
-  2. Move unique behaviors from the absorbed feature into the survivor.
-  3. Update the survivor's detail file with any additional content from the absorbed one.
-  4. Delete the absorbed feature's detail file and its behavior files.
-  5. Update any cross-references in other features that pointed to the absorbed ID.
-
-- **Remove**: Delete the feature's detail file and all its behavior files. Note the
-  removal in `clarifications-features.md` with the reason so future runs don't
-  recreate it.
-
-- **Keep both** (overlaps): Add a `## Relationship` section to both detail files
-  explaining the distinction. This prevents downstream agents from being confused
-  by the shared infrastructure.
-
-- **Clarify** (overlaps): Take the user's explanation and add it as a `## Relationship`
-  section to both files. Update data model / API sections if the user identified which
-  feature owns the shared entities.
-
-- **Assign** (orphans): Move the behavior to the correct parent feature. Update both
-  the source and destination detail files.
-
-- **Skip** (ambiguities): Mark the ambiguity as `[UNRESOLVED — user unsure]` in the
-  detail file. This is honest — downstream agents know not to guess.
-
-Save all resolutions to `./docs/features/clarifications-features.md` with
-the feature ID, resolution type, and user's explanation for each.
-
-#### 4.5e: Batch Processing
-
-Present candidates to the user in batches of 5-8 to avoid overwhelming them. Group
-related candidates together (e.g., all overlaps in one batch, then thin specs, then
-ambiguities). After each batch:
-
-1. Apply the resolutions immediately.
-2. Re-check whether any resolutions created new overlaps or orphans (e.g., a merge
-   might expose a new overlap with a third feature).
-3. Present the next batch.
-
-After all candidates are resolved, present a summary:
-```
-Resolution Summary:
-  Defined (enriched):     {N} features
-  Merged:                 {N} features absorbed → {N} survivors
-  Removed:                {N} features
-  Overlaps clarified:     {N} pairs
-  Orphans reassigned:     {N} behaviors
-  Ambiguities resolved:   {N}
-  Ambiguities unresolved: {N} (marked [UNRESOLVED — user unsure])
-
-Proceeding to build the master index...
-```
-
-### Context Checkpoint: After Resolution Interview
-
-**MANDATORY.** Follow the Context Checkpoint Protocol in `references/context-management.md`.
-
-The resolution interview involved scanning detail files, presenting candidates to the user
-in batches, and applying resolutions (edits, merges, deletions). If there were many
-resolution candidates, context is heavy. Evaluate and clear if needed.
-
-Preserved files: `interview.md`, `user-feature-map.md`, `clarifications.md`,
-`clarifications-features.md`, `discovery.json`, `plan.json`, `raw/*`,
-`coverage-audit.json`, `purpose-audit-*.md`, `synthesis-plan.json`,
-`details/*` (with resolutions applied)
-
-### 4c: Build the Index (Orchestrator — after all teammates finish)
-
-Once all synthesis teammates have completed:
-
-1. **Enumerate all detail files** produced in `./docs/features/details/`.
-   Use `Glob` to find `F-*.md` files.
-
-2. **Build the hierarchy from filenames and file headers.** Read only the first 5-10
-   lines of each detail file (the `# {ID}: {Name}` header and `## Parent` link) to
-   reconstruct the tree. Do NOT re-read full file contents.
-
-3. **Write `FEATURE-INDEX.md`** — table of contents only:
-
-```markdown
-# Product Feature Index
-
-> Reverse-engineered specification for AI/agent team implementation
-> Generated: {date}
-> Product: {name from interview}
-> Source repos: {list}
-> Total major features: {N}
-> Total sub-features: {N}
-> Total behaviors: {N}
-
-## Purpose
-
-This index is the master reference for a complete product rebuild. Each entry links
-to a detailed specification file containing everything needed for implementation:
-data schemas, API contracts, business rules, UI specs, edge cases, error states,
-and cross-references to related features.
-
-## How AI/Agent Teams Should Use This
-
-1. Read this index to understand full product scope
-2. Use the Dependency Graph to determine build order
-3. Pick a feature, follow its link to the detail file
-4. Implement from the detail spec (it contains everything needed)
-5. Check cross-references for integration points with other features
-6. Run the test specifications listed in each detail file
-
-## Feature Hierarchy
-
-### F-001: {Major Feature Name}
-- [F-001.01: {Sub-Feature Name}](./details/F-001.01.md)
-  - [F-001.01.01: {Behavior Name}](./details/F-001.01.01.md)
-  - [F-001.01.02: {Behavior Name}](./details/F-001.01.02.md)
-  - [F-001.01.03: {Behavior Name}](./details/F-001.01.03.md)
-- [F-001.02: {Sub-Feature Name}](./details/F-001.02.md)
-  - ...
-
-### F-002: {Major Feature Name}
-...
-
-### F-0XX: Cross-Cutting Concerns
-- [F-0XX.01: Error handling patterns](./details/F-0XX.01.md)
-- [F-0XX.02: Logging & audit trail](./details/F-0XX.02.md)
-- [F-0XX.03: Internationalization / localization](./details/F-0XX.03.md)
-- [F-0XX.04: Caching patterns](./details/F-0XX.04.md)
-- [F-0XX.05: Pagination patterns](./details/F-0XX.05.md)
-- [F-0XX.06: Search patterns](./details/F-0XX.06.md)
-- [F-0XX.07: File upload/download patterns](./details/F-0XX.07.md)
-
-## Dependency Graph
-
-| Feature | Depends On | Depended On By |
-|---------|-----------|----------------|
-| F-001.01 | F-003.01 (Email Service) | F-001.02, F-005.01 |
-| ... | ... | ... |
-
-## Suggested Build Order
-
-{Topological sort of the dependency graph, grouped into implementation phases}
-
-## Migration Notes
-
-{From user interview and code analysis: complexity flags, improvement opportunities,
-areas where original implementation was known to be problematic}
-```
-
-4. **Build the dependency graph.** Grep all detail files for `## Dependencies` sections
-   to extract the `Requires` and `Required by` relationships. Build the graph and
-   suggested build order from these.
-
-5. **Write `FEATURE-INDEX.json`** with the full structured hierarchy for programmatic
-   consumption by agent orchestrators. Build this from the enumerated detail files and
-   dependency graph — do NOT re-read full file contents.
-
-## Step 5: Validation & Summary
-
-1. **Cross-check against user's feature map.** Every feature they mentioned should appear.
-   Flag any missing. Account for features removed or merged in Step 4.5 — these are
-   expected absences, not gaps.
-2. **Count check.** Report totals by tier. Include before/after counts from Step 4.5
-   resolutions (e.g., "87 sub-features → 82 after 3 merges and 2 removals").
-3. **Coverage check.** Any raw outputs that didn't map to features?
-4. **Orphan check.** Any code that doesn't seem to belong to any feature?
-5. **Resolution check.** Report any remaining `[UNRESOLVED — user unsure]` markers from
-   Step 4.5. These are known ambiguities that downstream agents should handle defensively.
-6. **Present summary** with counts, coverage, unresolved ambiguities, and file locations.
-7. **Ask the user** to review the index and flag anything missing or miscategorized.
+**This is the final phase. When `derive-features.md` reports completion, the pipeline
+is done.**
 
 ## Resume Behavior
 
 On every run, first **check for `.progress.json`**. If it exists, read it to determine
-exactly where the previous run stopped. This is faster and more reliable than scanning
-output files.
+exactly where the previous run stopped.
 
-Then **auto-clear derived synthesis artifacts** that are always regenerated.
-These are cheap to rebuild and may be stale if raw data changed:
+Then **auto-clear derived artifacts** that are always regenerated:
 
 ```bash
-rm -f ./docs/features/synthesis-plan.json
-rm -f ./docs/features/coverage-audit.json
-rm -f ./docs/features/purpose-audit-*.md
+rm -f ./docs/features/feature-clustering.json
 rm -f ./docs/features/FEATURE-INDEX.md
 rm -f ./docs/features/FEATURE-INDEX.json
 ```
 
 **Do NOT clear:**
-- `.progress.json` — the orchestrator's resume state (cleared only after Step 5 completes)
-- `details/` — verify mode patches these incrementally; clearing forces a full rebuild
-- `raw/` — the expensive analysis output
-- `interview.md`, `user-feature-map.md`, `clarifications.md`, `clarifications-features.md` — user input
-- `discovery.json`, `plan.json` — reused if unchanged
+- `.progress.json` — resume state (cleared only after Step 6 completes)
+- `graph.db` — the SQLite database (index, connections, graph, annotations). This is
+  the most expensive artifact. Incremental steps update it in place.
+- `intermediate/` — JSONL teammate output (can be deleted after merge into SQLite,
+  but kept for debugging and re-merge if needed)
+- `details/` — verify mode patches incrementally
+- `interview.md`, `user-feature-map.md`, `clarifications.md`, `clarifications-features.md`
+- `discovery.json`, `plan.json`
 
-Then apply these resume rules:
-- Step 0: Skip if `interview.md` exists (load it for context).
-- Step 1: Re-run unless `discovery.json` exists.
+Resume rules:
+- Step 0: Skip if `interview.md` exists.
+- Step 1: Skip if `discovery.json` exists.
 - Step 2: Re-run unless `plan.json` exists and discovery hasn't changed.
-- Step 3: Use `.progress.json` to skip completed dimensions and resume from the
-  exact batch that was in progress. Fall back to scanning raw output files if no
-  progress file exists.
-- Step 3.5: Always re-run **using the scripted audit** (`scripts/coverage-audit.py`),
-  not LLM interpretation. The derived files were already cleared above.
-- Step 4a: Always re-run (synthesis-plan.json was cleared).
-- Step 4b: Use `.progress.json` to determine which feature areas need create vs verify
-  mode. Fall back to scanning detail files if no progress file exists.
-- Step 4.5a (purpose audit): Always re-run (purpose-audit-*.md files were cleared).
-  The purpose audit is cheap relative to synthesis and catches collapsed/missing
-  purpose-level behaviors that the synthesizer may have missed.
-- Step 4.5b-e (user resolution): Skip if `clarifications-features.md` exists —
-  resolutions are already applied to detail files. If detail files were regenerated
-  (4b ran in create mode for any feature) or the purpose audit created new behaviors,
-  re-run user resolution for affected features only.
-- Step 4c: Always re-run (indexes were cleared).
+- Step 3 (Phase 1 — enriched index): Two-phase delegation. Mechanical indexing runs
+  once; connection hunting runs in a loop driven by create (2×20 files per
+  iteration). Resume reads `.progress.json` `connection_hunting` section to determine
+  pending files and continues the loop. See `build-index.md` for per-invocation rules.
+- Step 4 (Phase 2 — outcome graph): Delegates to `build-graph.md` which tracks its
+  own progress in the `graph_building` section of `.progress.json`.
+  See `build-graph.md` for detailed resume rules.
+- Step 5 (Phase 3 — annotation): Delegates to `annotate-pathways.md` which tracks its
+  own progress in the `annotation` section of `.progress.json`.
+  See `annotate-pathways.md` for detailed resume rules.
+- Step 6 (Phase 4 — derivation + index + validation): Delegates to `derive-features.md`
+  which tracks its own progress in the `feature_derivation` section of `.progress.json`.
+  See `derive-features.md` for detailed resume rules.
+
+## Progress File Schema
+
+```json
+{
+  "command": "create",
+  "current_step": "5",
+  "current_substep": "annotate",
+  "batch_number": 2,
+  "batches_total": 4,
+
+  "indexing": {
+    "completed_splits": ["index--main", "index--shared"],
+    "pending_splits": ["index--renderer"],
+    "failed_splits": [],
+    "merged_to_sqlite": false
+  },
+
+  "connection_hunting": {
+    "total_files": 45,
+    "completed_files": ["src/services/order.ts", "src/handlers/ipc-handlers.ts"],
+    "pending_files": ["src/events/emitter.ts", "src/middleware/auth.ts"],
+    "failed_files": [],
+    "large_files": ["src/services/SyncServiceCore.cs"],
+    "large_file_count": 1,
+    "user_interview_done": false,
+    "merged_to_sqlite": false,
+    "call_graph_enriched": false
+  },
+
+  "enriched_index_complete": true,
+
+  "graph_building": {
+    "completed": false,
+    "validation_interview_done": false
+  },
+
+  "annotation": {
+    "completed_groups": ["EP-001-group", "EP-010-group"],
+    "pending_groups": ["EP-015-group", "EP-020-group"],
+    "failed_groups": [],
+    "merged_to_sqlite": false
+  },
+
+  "feature_derivation": {
+    "completed_features": ["F-001", "F-002"],
+    "pending_features": ["F-003", "F-004"],
+    "failed_features": [],
+    "user_resolution_done": false
+  },
+
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+## Reusing Artifacts from Previous Pipeline Runs
+
+If the standard `/feature-inventory:create` pipeline was run previously, several artifacts
+can be consumed by the graph pipeline to save time and improve quality:
+
+### Directly Reusable (skip the step entirely)
+
+| Artifact | Graph Pipeline Step | Notes |
+|----------|-------------------|-------|
+| `interview.md` | Step 0 (Interview) | Same questions, same answers. Skip the interview entirely. |
+| `user-feature-map.md` | Step 0 (Interview) | The user's mental model is input to feature clustering (`derive-features.md` Step 1). |
+| `discovery.json` | Step 1 (Discovery) | Repo structure hasn't changed. Skip discovery. |
+| `clarifications.md` | Phase 1 + 2 | Previous user clarifications about dead code, external services, and ambiguous connections are still valid. Used by `build-index.md` and `build-graph.md`. |
+
+### Cross-Reference Material (don't skip, but use as validation)
+
+| Artifact | How the Graph Pipeline Uses It |
+|----------|-------------------------------|
+| `raw/` dimension outputs | After Phase 4 derives features, compare the graph-derived features against the raw dimension analysis outputs from the previous run. Mismatches reveal either: (a) dimensions the graph missed (missing connections), or (b) dimension analysis that was wrong (top-down misattribution). This cross-reference is the strongest validation that the graph pipeline captured everything. |
+| Previous `details/` files | Don't import these — they're structured around the old pipeline's dimension-based hierarchy. But read them during `derive-features.md` Step 3 (user resolution) to verify that every previously-documented behavior appears somewhere in the new graph-derived features. Any behavior that appeared in the old pipeline but NOT in the graph pipeline is a red flag: either a missed connection or a false positive from the original analysis. |
+| Previous `FEATURE-INDEX.json` | During `derive-features.md` Step 5 (validation), compare the old feature list against the new one. Every feature in the old index should map to at least one feature in the new index (possibly renamed or restructured). Document any features that were present in the old pipeline but absent in the new one — these require user confirmation. |
+
+### Not Reusable
+
+| Artifact | Why |
+|----------|-----|
+| Previous `plan.json` | The graph pipeline has fundamentally different splitting logic (index by directory vs. analyze by feature area). |
+| Previous `.progress.json` | Different step structure. |
+
+### How to Detect Previous Run Artifacts
+
+At the start of Step 0, check for the existence of previous-run artifacts:
+
+```bash
+# Check for reusable artifacts
+ls ./docs/features/interview.md 2>/dev/null && echo "interview: reusable"
+ls ./docs/features/user-feature-map.md 2>/dev/null && echo "feature-map: reusable"
+ls ./docs/features/discovery.json 2>/dev/null && echo "discovery: reusable"
+ls ./docs/features/clarifications.md 2>/dev/null && echo "clarifications: reusable"
+
+# Check for cross-reference material
+ls ./docs/features/raw/ 2>/dev/null && echo "raw dimensions: available for cross-reference"
+ls ./docs/features/details/F-*.md 2>/dev/null && echo "previous features: available for cross-reference"
+ls ./docs/features/FEATURE-INDEX.json 2>/dev/null && echo "previous index: available for cross-reference"
+```
+
+If previous-run artifacts are found, present to the user:
+
+```
+Previous Pipeline Artifacts Found
+===================================
+Reusable (will skip these steps):
+  ✓ interview.md — User interview answers
+  ✓ user-feature-map.md — User's mental model
+  ✓ discovery.json — Repository scan results
+  ✓ clarifications.md — Previous ambiguity resolutions
+
+Cross-reference material (will validate against):
+  ✓ raw/ — Previous dimension analysis outputs
+  ✓ details/ — Previous feature detail files
+  ✓ FEATURE-INDEX.json — Previous feature index
+
+The graph pipeline will build the index and graph from scratch but will
+cross-reference its results against the previous analysis to catch gaps.
+
+Proceed? [Y/n]
+```

@@ -32,7 +32,7 @@ be extracted into a CI script that runs automatically.
 - A completed graph-based inventory must exist (`./docs/features/graph.db` with all
   tables populated, plus `./docs/features/details/` with feature files)
 - The legacy codebase must be a git repository
-- Agent Teams must be enabled (same prerequisite as `create-graph`)
+- Agent Teams must be enabled (same prerequisite as `create`)
 
 ## Input
 
@@ -80,7 +80,7 @@ Estimated impact: {light | moderate | heavy}
 ```
 
 If heavy, warn the user that this may take significant time and suggest running the
-full `create-graph` pipeline instead if the changes are fundamental (new major feature,
+full `create` pipeline instead if the changes are fundamental (new major feature,
 architecture refactor, etc.).
 
 ## Step 2: Re-Index Changed Files
@@ -294,7 +294,7 @@ partial updates don't leave the database in an inconsistent state.
 
 No `.progress.json` is needed — the reindex is typically fast enough to complete in a
 single session. For very large diffs (>100 files), consider running the full
-`create-graph` pipeline instead.
+`create` pipeline instead.
 
 ## Future: CI Integration
 

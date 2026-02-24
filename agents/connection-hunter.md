@@ -642,8 +642,8 @@ tree-sitter and graph-derived hints from the cross-reference pass):
 largest set and the most important for completeness):
 
 6. **`dead_end`**: A call in your file where the callee could not be resolved to any
-   indexed symbol. The `expression` field contains the unresolved callee name; the
-   `note` field contains the calling context.
+   indexed symbol. The `pattern` field contains the unresolved callee name; the
+   `context` field contains the calling context.
 
    Resolution strategy:
    - **Built-in / runtime API** (e.g., `console.log`, `setTimeout`, `JSON.parse`,
@@ -668,17 +668,17 @@ largest set and the most important for completeness):
    indexed symbol. The `expression` field contains the symbol name; the `note` field
    describes the symbol kind.
 
-   Resolution strategy:
+   Resolution strategy (the `pattern` field has the symbol name, `context` has kind):
    - **Entry point** (route handler, event listener, lifecycle hook, main function,
-     exported API): Mark as resolved with note `"entry_point:<mechanism>"`. These are
+     exported API): Mark as resolved with context `"entry_point:<mechanism>"`. These are
      called by the framework/runtime, not by application code.
    - **Indirectly invoked** (called via reflection, string dispatch, convention routing,
      DI container, decorator wiring): Document the indirect connection using the
      appropriate connection type. This is a missing edge in the call graph.
-   - **Exported but uncalled within this repo**: Mark as resolved with note
+   - **Exported but uncalled within this repo**: Mark as resolved with context
      `"public_api"` — the symbol is part of the module's public interface, consumed
      externally.
-   - **Truly dead code**: Mark as resolved with note `"dead_code"`. This is a valid
+   - **Truly dead code**: Mark as resolved with context `"dead_code"`. This is a valid
      finding — the feature deriver uses dead code information to assess feature
      completeness.
    - **Unresolvable**: **Interview the user directly** via `AskUserQuestion`. You

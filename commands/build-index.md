@@ -133,7 +133,10 @@ Connection hints (for hunter): {N}
 
 ### Context Checkpoint: After Indexing
 
-**MANDATORY — CLEAR STRONGLY RECOMMENDED.** Step 2 spawns connection hunters.
+**MANDATORY — CLEAR STRONGLY RECOMMENDED, but ONLY after confirming all indexing
+agents have completed and their output has been merged to SQLite.** See
+`references/context-management.md` "CRITICAL: /clear and /compact Kill In-Process
+Agents" — never clear while agents are still running. Step 2 spawns connection hunters.
 
 Preserved files: `interview.md`, `user-feature-map.md`, `discovery.json`, `plan.json`,
 `graph.db`, `intermediate/index--*.jsonl`

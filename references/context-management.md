@@ -11,6 +11,46 @@ product from scratch. Your output is the ONLY reference they will have. This mea
 - Every detail matters (defaults, edge cases, error messages, magic numbers)
 - But you must manage context carefully to actually finish the job
 
+## CRITICAL: /clear and /compact Kill In-Process Agents
+
+**`/clear` and `/compact` terminate the current session.** All in-process agents (teammates
+spawned via Task/TeamCreate) are tied to the parent session's lifecycle. When the session
+ends, every running agent is killed immediately — losing ALL tokens spent on their work.
+
+**This is the single most expensive failure mode in the plugin.** A single premature `/clear`
+during connection hunting killed 44 agents mid-work, wasting significant Opus-tier tokens
+with zero usable output (no summary lines written).
+
+### The Rule
+
+> **NEVER suggest `/clear` or `/compact` while ANY in-process agents are running.**
+>
+> Before ANY context checkpoint that may trigger a clear:
+> 1. **Wait** for all running agents to complete (check for summary lines in output files)
+> 2. **Verify** agent output is written to disk and non-empty
+> 3. **Only THEN** present the clear/compact suggestion to the user
+>
+> If context is critical but agents are still running, tell the user:
+> "Context is heavy but {N} agents are still running. Waiting for them to finish
+> before clearing to avoid losing their work."
+
+### How to Verify Zero Agents In-Flight
+
+Before any checkpoint message that suggests clearing:
+
+```bash
+# Check for output files missing summary lines (= still running or died mid-work)
+for f in intermediate/connections--*.jsonl; do
+  last=$(tail -1 "$f" 2>/dev/null)
+  echo "$last" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('type')=='summary' or d.get('connection_type')=='summary' else 1)" 2>/dev/null || echo "INCOMPLETE: $f"
+done
+```
+
+If ANY file is INCOMPLETE and was modified in the last 10 minutes, agents are likely
+still running. **Do not suggest clearing.**
+
+---
+
 ## Hard Rules
 
 1. **Never read a file without a line range** unless it's under 50 lines.
@@ -184,7 +224,13 @@ After the 2nd, 4th, 6th, ... batch completes:
 2. **Verify all batch outputs are on disk** — check that every teammate from the
    completed batches produced a non-empty output file.
 
-3. **Present this message:**
+3. **MANDATORY: Verify zero agents in-flight.** Before presenting the checkpoint message,
+   confirm ALL agents from completed batches have written their summary lines. If any
+   agents are still running (output file modified recently but no summary line), **WAIT
+   for them to complete** before proceeding to the checkpoint message. See
+   "CRITICAL: /clear and /compact Kill In-Process Agents" above.
+
+4. **Present this message:**
 
    ```
    ⚠ BATCH CHECKPOINT — HARD STOP
@@ -285,7 +331,9 @@ At designated checkpoint locations in the orchestrator workflow, the orchestrato
    - How many user interactions have occurred?
    - How many file reads/writes have accumulated in context?
 
-3. **If context is heavy, MANDATE a clear.** Do not suggest it as optional. Tell the user:
+3. **If context is heavy, MANDATE a clear — BUT ONLY AFTER VERIFYING ZERO AGENTS
+   IN-FLIGHT.** See "CRITICAL: /clear and /compact Kill In-Process Agents" above.
+   If agents are still running, wait for them to complete first. Then tell the user:
 
    ```
    ⚠ CONTEXT CHECKPOINT — CLEAR REQUIRED
@@ -366,7 +414,9 @@ If at any point during a step the orchestrator senses context is growing dangero
 (e.g., monitoring a large batch of teammates, or processing many gap-fill cycles),
 OR if the context watchdog emits a CRITICAL or BLOCK warning:
 
-1. **Finish the current sub-step** (e.g., let the current batch complete).
+1. **Finish the current sub-step AND wait for ALL running agents to write their
+   summary lines** (e.g., let the current batch complete and confirm all output files
+   have summaries). See "CRITICAL: /clear and /compact Kill In-Process Agents" above.
 2. **Write all intermediate state to disk** (including the orchestrator progress file).
 3. **Present the clear mandate** to the user with resume instructions.
 4. **Do NOT start the next sub-step.**

@@ -69,6 +69,7 @@ the legacy architecture.
 
 **A "prompt is too long" error is CATASTROPHIC.** Follow the same context management
 protocols as the standard create pipeline. See `references/context-management.md` for:
+- **CRITICAL: /clear kills in-process agents** — never clear while agents are running
 - Batch-level hard stops (every 2 batches)
 - Step-boundary checkpoints
 - Context watchdog integration

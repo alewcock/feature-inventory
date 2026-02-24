@@ -263,6 +263,14 @@ The extraction script is a single Python file that:
    - String literal dispatch: `handlers["key"]` → `string_key_dispatch`
    - Decorator/attribute patterns that imply framework wiring → `framework_magic`
    - Reflection patterns: `getattr()`, `eval()`, `Activator.CreateInstance()` → `reflection`
+   - Data store client calls that read/write keyed state → `data_store_access`
+     (Redis: `StringGetAsync`, `StringSetAsync`, `HashGetAsync`, `HashSetAsync`,
+      `StreamAddAsync`, `KeyDeleteAsync`, `GetAsync`, `SetAsync`;
+      Memcached: `get`, `set`, `delete`;
+      DynamoDB: `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`;
+      S3: `GetObject`, `PutObject`, `DeleteObject`;
+      or any repository/cache class with paired Get*/Set* methods operating on
+      string-interpolated keys)
 
 3. **Writes JSONL output** — one JSON object per symbol, matching the schema
    defined in "Symbol Types to Index" above.
@@ -683,6 +691,13 @@ Some patterns can't be resolved by mechanical indexing. Flag these in a
     "line": 30,
     "expression": "getattr(model, field_name)",
     "note": "Reflection — field_name determined at runtime"
+  },
+  {
+    "type": "data_store_access",
+    "file": "src/repositories/RedisCache.cs",
+    "line": 25,
+    "expression": "RedisCache.StringGetAsync($\"device-status:{playerId}\")",
+    "note": "Data store read — key pattern 'device-status:{playerId}'. Paired with SetDeviceStatusAsync at line 43 which writes the same key. The key is the shared node connecting readers to writers."
   }
 ]
 ```

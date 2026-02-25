@@ -94,7 +94,31 @@ After all indexing teammates complete:
      and update `callee_id`. Update `caller_count` on each symbol.
    - Resolve imports: match `imports.source` to `symbols.file` for within-project imports.
    - Reconcile duplicate references across splits (same symbol indexed from different scopes).
-4. **Generate graph-derived connection hints** from the cross-referenced data. These
+4. **Run the namespace resolution pass** on remaining unresolved calls. Many codebases
+   use a central module object (e.g., `App`) where sub-modules are assigned in the
+   constructor (`this.Alerts = new AlertsClass()`). Tree-sitter indexes the call as
+   `App.Alerts.FullscreenAlert` but the symbol is `AlertsClass.FullscreenAlert` — a
+   direct name match fails even though the import chain is fully indexed.
+
+   **Algorithm:**
+   a. Find "hub" files: files that are widely imported AND contain `this.X = new YClass()`
+      assignment patterns. Query the `imports` table for the most-imported files, then
+      read each one looking for constructor assignments.
+   b. Build a namespace map: for each hub, map `HubExportName.PropertyName` → `ClassName`.
+      Example: `App.Alerts` → `AlertsClass`, `App.Remote` → `RemoteClass`.
+   c. For 2-hop chains, read the sub-module files too. If `RemoteClass` has
+      `this.Navigation = new NavigationClass()`, add `App.Remote.Navigation` → `NavigationClass`.
+   d. For each unresolved call matching `HubName.X.Y(...)`, look up `X` in the namespace
+      map to get the class, then match `ClassName.Y` in the `symbols` table. Update
+      `callee_id` and `caller_count`.
+   e. Handle property-access chains: if `App.Settings.X.Value` doesn't match a symbol
+      for `.Value` (because it's a framework method on a Setting object), resolve to the
+      deepest symbol that exists (`SettingsClass.X` or `SettingsClass`).
+
+   This pass runs **before** hint generation so that resolved namespace calls never
+   become dead-end hints in the first place. Log the count of calls resolved this way.
+
+5. **Generate graph-derived connection hints** from the cross-referenced data. These
    are the most important hints — they identify every gap in the call graph that
    tree-sitter's 4 syntactic patterns miss, using pure graph analysis:
    ```sql

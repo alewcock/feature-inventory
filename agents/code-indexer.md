@@ -489,27 +489,38 @@ For JavaScript, Python, Ruby, and other dynamic languages:
    vendor/node_modules/generated directories. Write the manifest. Map each file
    to its tree-sitter language identifier.
 
-3. **Write and run the extraction script.** Create a Python script that:
-   a. Iterates over every file in the manifest.
-   b. Parses each file with tree-sitter using the appropriate language grammar.
-   c. Walks the AST to extract symbols: definitions, signatures, call sites,
-      imports, exports, decorators/attributes.
-   d. Flags connection hints: dynamic dispatch, reflection, framework magic,
-      string-keyed dispatch patterns.
-   e. Writes one JSONL line per symbol to the output file.
-   f. Writes a summary line at the end with file counts and symbol counts.
+3. **Run the static extraction script.** The plugin ships a tested, static Python
+   script at `scripts/extract_symbols.py` (relative to the plugin root). Do NOT
+   write your own extraction script — use the provided one.
 
-   Run via Bash:
-   ```bash
-   python3 /tmp/extract_symbols.py \
-     --scope "src/main,src/renderer" \
-     --languages "typescript,javascript" \
-     --output intermediate/index--main.jsonl \
-     --manifest intermediate/manifest--main.json
-   ```
+   a. Write a manifest JSON file listing all files in scope with their languages:
+      ```json
+      {"files": [
+        {"path": "src/js/remote/promote_ui.js", "language": "javascript"},
+        {"path": "CPTV.Api.Core/Models/CRUD/Song.cs", "language": "c_sharp"},
+        {"path": "mysql/bmn_content_Songs.sql", "language": "sql"}
+      ]}
+      ```
+   b. Run the script:
+      ```bash
+      python3 ~/.claude/plugins/marketplaces/feature-inventory/scripts/extract_symbols.py \
+        --manifest intermediate/manifest--{split}.json \
+        --output intermediate/index--{split}.jsonl \
+        --hints-output intermediate/hints--{split}.jsonl \
+        --repo-root /path/to/repo
+      ```
+   c. Check the exit code. **Non-zero means validation failed** — one or more files
+      had corrupt symbol names. Read the error output to see which files and what
+      the corruption looks like. Do NOT continue with corrupt data.
+   d. Read the summary line at the end of the JSONL output to verify counts.
 
-   The script is disposable — written by the agent at runtime for the specific
-   languages and frameworks detected, then discarded after extraction.
+   The script handles: JavaScript, TypeScript, C#, C/C++, Python, SQL/MySQL.
+   It uses `node.text.decode('utf-8')` for all symbol names (never manual byte
+   slicing), and validates every symbol against its source line with zero tolerance.
+
+   **DO NOT generate your own extraction script.** The static script exists because
+   agent-generated scripts caused systematic symbol name truncation that corrupted
+   the entire downstream pipeline.
 
 4. **Review connection hints (LLM pass).** After tree-sitter extraction, review
    ONLY the flagged connection hints. For each hint:
@@ -706,3 +717,62 @@ Some patterns can't be resolved by mechanical indexing. Flag these in a
 ```
 
 These hints are consumed by the connection hunter agent to resolve indirect edges.
+
+## Symbol Extraction Validation
+
+After extracting symbols from each file, the extraction script MUST validate that symbol
+names are not corrupted (e.g., truncated, offset, or garbled). This catches tree-sitter
+byte-offset bugs that silently chop the first N characters off symbol names.
+
+### Validation Rules
+
+For each extracted symbol in a file:
+
+1. **Source-line substring check:** Read the source line at `line_start`. The extracted
+   `name` MUST appear as a substring of that source line. If it does not, the symbol
+   is flagged as potentially corrupt.
+
+2. **Case-start consistency:** If the source line at the symbol's position starts with
+   an uppercase letter (e.g., `class PromoteUIClass`), the extracted name must NOT
+   start with a lowercase letter. A name like `omoteUIClass` when the source says
+   `PromoteUIClass` is a truncation bug.
+
+3. **Zero tolerance for corruption.** If ANY symbol in a file fails validation,
+   **FAIL the entire file**:
+   - Do NOT write ANY symbols from that file to the JSONL output
+   - Log an error: `VALIDATION FAILED: {file} — {corrupt_count}/{total} symbols
+     corrupted. Sample: extracted "{corrupt_name}" but source line says "{source_line}"`
+   - Mark the file as `status: 'failed'` in the file manifest
+   - Report the failure to the orchestrator so it can investigate the tree-sitter
+     extraction script for byte-offset bugs
+   - **The extraction script itself has a bug if even one symbol is corrupt.**
+     The agent MUST fix the script and re-run — not skip the file and continue.
+     Corrupt symbol names poison the entire index (unresolvable calls, missed
+     entry points, broken cross-references).
+
+### Implementation in the Extraction Script
+
+The runtime-generated Python extraction script must include a validation pass after
+extracting symbols from each file. Pseudocode:
+
+```python
+def validate_symbols(symbols, source_lines):
+    corrupt = []
+    for sym in symbols:
+        line = source_lines[sym['line_start'] - 1]  # 0-indexed
+        if sym['name'] not in line:
+            corrupt.append(sym)
+        elif line_has_uppercase_at_symbol(line, sym) and sym['name'][0].islower():
+            corrupt.append(sym)
+
+    if len(corrupt) > 0:
+        raise ExtractionValidationError(
+            f"{len(corrupt)}/{len(symbols)} symbols failed validation. "
+            f"FIX THE EXTRACTION SCRIPT — do not skip the file. "
+            f"Sample: {[(s['name'], source_lines[s['line_start']-1].strip()) for s in corrupt[:5]]}"
+        )
+```
+
+This validation is MANDATORY. The extraction script must not skip it. Corrupt symbol
+data breaks the entire downstream pipeline — graph construction, connection hunting,
+and feature derivation all depend on accurate symbol names.

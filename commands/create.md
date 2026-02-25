@@ -65,6 +65,98 @@ discovered from what the code DOES (outcomes) rather than how it's structured (d
 This produces outcome-focused features that free the re-implementor from replicating
 the legacy architecture.
 
+## Phase Gate Protocol
+
+**MANDATORY human approval is required between every phase.** The pipeline must NEVER
+silently advance from one phase to the next. Each gate presents quality stats and
+requires explicit user approval via `AskUserQuestion` before proceeding.
+
+### Gate 1: After Phase 1 (Enriched Index) — before Phase 2
+
+Present to the user:
+```
+Phase 1 Complete — Enriched Index Quality Report
+===================================================
+Symbols indexed: {N}
+  Functions: {N}  Classes: {N}  Methods: {N}  Routes: {N}
+  Constants: {N}  Types: {N}  Variables: {N}
+Call resolution rate: {pct}% ({resolved}/{total} calls)
+Dead ends remaining: {N}
+Dead starts remaining: {N}
+Direct call edges: {N}
+Indirect connections found: {N}
+Connection hints resolved: {N}/{total_hints}
+
+Approve advancing to Phase 2 (Graph Construction)? [Y/n]
+```
+
+Ask via `AskUserQuestion`. If the user says no, STOP the pipeline. Do not proceed.
+
+### Gate 2: After Phase 2 (Graph Built) — before Phase 3
+
+Present to the user:
+```
+Phase 2 Complete — Outcome Graph Quality Report
+==================================================
+Entry points: {N}
+Final outcomes: {N}
+Pathways traced: {N}
+Fan-out points: {N}
+Infrastructure symbols: {N}
+Index coverage: {pct}%
+Validation issues resolved: {N}
+Orphan entry points: {N}
+Unreachable outcomes: {N}
+
+Approve advancing to Phase 3 (Pathway Annotation)? [Y/n]
+```
+
+Ask via `AskUserQuestion`. If the user says no, STOP the pipeline.
+
+### Gate 3: After Phase 3 (Annotation) — before Phase 4
+
+Present to the user:
+```
+Phase 3 Complete — Pathway Annotation Quality Report
+=======================================================
+Pathways annotated: {N}/{total}
+Annotation groups completed: {N}
+Dimensions captured per pathway (avg): {N}
+Pathways with data dimension: {N}
+Pathways with auth dimension: {N}
+Pathways with UI dimension: {N}
+Pathways with side-effect dimension: {N}
+
+Approve advancing to Phase 4 (Feature Derivation)? [Y/n]
+```
+
+Ask via `AskUserQuestion`. If the user says no, STOP the pipeline.
+
+### Gate 4: After Phase 4 Clustering — before Feature Derivation
+
+Present to the user:
+```
+Phase 4 — Clustering Quality Report
+=======================================
+Clusters identified: {N}
+Pathways per cluster (avg): {N}
+Largest cluster: {name} ({N} pathways)
+Smallest cluster: {name} ({N} pathways)
+Unclustered pathways: {N}
+
+Approve proceeding with feature derivation from these clusters? [Y/n]
+```
+
+Ask via `AskUserQuestion`. If the user says no, STOP the pipeline.
+
+### Gate Enforcement
+
+- Each gate MUST use `AskUserQuestion` — not a rhetorical prompt that auto-continues.
+- If the user rejects a gate, the pipeline stops and the user can investigate, re-run
+  the failed phase, or adjust parameters.
+- Gate stats must be queried from `graph.db`, not estimated or approximated.
+- The orchestrator must NOT catch gate rejections and continue anyway.
+
 ## Important: Context Window Management
 
 **A "prompt is too long" error is CATASTROPHIC.** Follow the same context management
@@ -249,6 +341,12 @@ On resume (after /clear), check `.progress.json`:
 - If `connection_hunting.pending_count == 0` but `merged_to_sqlite == false` →
   spawn build-index for merge/validate/enrich
 
+### Phase Gate 1: Approve Enriched Index
+
+**MANDATORY — see Phase Gate Protocol above.** Before advancing to Phase 2, present
+the enriched index quality stats and require explicit user approval via
+`AskUserQuestion`. If the user rejects, STOP.
+
 ### Context Checkpoint: After Phase 1
 
 **MANDATORY — CLEAR STRONGLY RECOMMENDED.** Step 4 (graph building) needs headroom.
@@ -270,6 +368,13 @@ pathways, final outcomes, fan-out points — ready for pathway annotation.
 
 **Do NOT proceed to Step 5 until the build-graph Task returns successfully.**
 
+### Phase Gate 2: Approve Outcome Graph
+
+**MANDATORY — see Phase Gate Protocol above.** Before advancing to Phase 3, present
+the outcome graph quality stats (entry points, final outcomes, pathways, fan-out points,
+coverage, validation issues) and require explicit user approval via `AskUserQuestion`.
+If the user rejects, STOP.
+
 ### Context Checkpoint: After Phase 2
 
 **MANDATORY — CLEAR STRONGLY RECOMMENDED.**
@@ -288,6 +393,12 @@ ready for feature derivation.
 
 **Do NOT proceed to Step 6 until the annotate-pathways Task returns successfully.**
 
+### Phase Gate 3: Approve Pathway Annotations
+
+**MANDATORY — see Phase Gate Protocol above.** Before advancing to Phase 4, present
+the annotation quality stats (pathways annotated, dimension coverage) and require
+explicit user approval via `AskUserQuestion`. If the user rejects, STOP.
+
 ### Context Checkpoint: After Phase 3
 
 **MANDATORY — CLEAR STRONGLY RECOMMENDED.**
@@ -301,6 +412,16 @@ Preserved files: everything from previous steps + annotations merged in `graph.d
 This step clusters pathways into feature areas, spawns feature derivation agents,
 interviews the user for quality resolution, builds the feature index, and validates
 full coverage.
+
+### Phase Gate 4: Approve Clustering
+
+**MANDATORY — see Phase Gate Protocol above.** After the derive-features agent completes
+clustering but BEFORE it proceeds to individual feature derivation, present the cluster
+summary (cluster count, pathways per cluster, largest/smallest clusters, unclustered
+pathways) and require explicit user approval via `AskUserQuestion`. If the user rejects,
+STOP. The derive-features agent must support this gate — if it does not pause for
+approval, the orchestrator must verify clustering output before allowing derivation
+to continue.
 
 When the Task returns, the full feature inventory exists: detail files (`F-*.md`),
 navigable index (`FEATURE-INDEX.md`), and machine-readable index (`FEATURE-INDEX.json`).

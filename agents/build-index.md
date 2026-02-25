@@ -139,6 +139,64 @@ db.commit()
 
 For very large codebases (>50,000 symbols), spawn a dedicated merge teammate.
 
+### 1c.5: Index Quality Gate
+
+**MANDATORY — stops the pipeline if the index is garbage.** This gate prevents wasting
+massive connection-hunting effort on a corrupt index (e.g., truncated symbol names from
+tree-sitter byte-offset bugs).
+
+After the SQLite merge and cross-reference pass (Step 1c), run these quality checks:
+
+1. **Count dead ends and dead starts:**
+   ```sql
+   SELECT COUNT(*) FROM connection_hints WHERE hint_type = 'dead_end';
+   SELECT COUNT(*) FROM connection_hints WHERE hint_type = 'dead_start';
+   ```
+
+2. **Calculate call resolution rate:**
+   ```sql
+   SELECT
+     COUNT(CASE WHEN callee_id IS NOT NULL THEN 1 END) AS resolved_calls,
+     COUNT(*) AS total_calls,
+     ROUND(100.0 * COUNT(CASE WHEN callee_id IS NOT NULL THEN 1 END) / MAX(COUNT(*), 1), 1) AS resolution_pct
+   FROM calls;
+   ```
+
+3. **If resolution rate < 50%, STOP IMMEDIATELY.** Do NOT proceed to connection hunting.
+   Present this to the user:
+   ```
+   INDEX QUALITY GATE — FAILED
+   ================================
+   Call resolution rate: {resolution_pct}% ({resolved_calls}/{total_calls})
+   Dead ends: {dead_end_count}
+   Dead starts: {dead_start_count}
+
+   This resolution rate is critically low and suggests a tree-sitter extraction
+   problem (e.g., symbol name truncation). Connection hunting on a corrupt index
+   will waste massive effort chasing ghosts.
+
+   Sample of 20 unresolved calls with source lines:
+   {for each: callee_name | call_file:call_line | actual source line text}
+
+   DO NOT proceed to connection hunting until this is investigated.
+   ```
+
+4. **Sample validation:** Pull 20 unresolved calls and display them alongside the
+   actual source line content so the user can visually check for truncation:
+   ```sql
+   SELECT c.callee_name, c.call_file, c.call_line
+   FROM calls c WHERE c.callee_id IS NULL LIMIT 20;
+   ```
+   For each, read the source file at that line and display side-by-side.
+
+5. **Require explicit user approval** via `AskUserQuestion`:
+   - "The index quality gate shows {resolution_pct}% call resolution. Do you want to
+     proceed to connection hunting, or investigate the extraction quality first?"
+   - If the user says to investigate, STOP and return with a diagnostic report.
+   - If the user approves, continue to Step 1d.
+
+6. **If resolution rate >= 50%**, still present the stats but proceed automatically.
+
 ### 1d: Index Validation
 
 Quick sanity checks on the merged index:
@@ -323,6 +381,14 @@ Only return `ENRICHED_INDEX_COMPLETE` when the query returns zero rows. This
 guarantees Phase 2 receives a call graph with no dead ends — every call resolves
 to a target, every reachable symbol has at least one caller.
 
+**HARD ENFORCEMENT:** If the query returns ANY rows (unresolved count > 0), the agent
+MUST NOT return `ENRICHED_INDEX_COMPLETE`. Instead:
+1. Report the exact count and a sample of 20 unresolved hints to the user.
+2. Ask the user via `AskUserQuestion`: "There are still {N} unresolved dead ends/starts.
+   Options: (a) re-spawn hunters for remaining files, (b) mark remaining as accepted
+   dead code, (c) stop and investigate."
+3. Only proceed based on the user's explicit choice. Never silently advance.
+
 ### 2c: Merge Connections into SQLite
 
 After all hunters complete:
@@ -419,3 +485,53 @@ Resume rules:
 - **Step 2e** (enrich call graph): Re-run if new connections were added since last run.
 - **Completion gate**: Phase 1 passes only when zero dead_end/dead_start hints remain
   unresolved.
+
+## Completion Verification
+
+Before returning ANY completion status, the agent MUST verify its work. Never advance
+or return success without proving the work was actually done.
+
+### `INDEXING_COMPLETE` — Verification Requirements
+
+1. **Symbol count > 0:** `SELECT COUNT(*) FROM symbols` must return > 0.
+2. **Source-line spot check:** Sample 10 random symbols and confirm each name appears
+   as a substring of its source line:
+   ```sql
+   SELECT name, file, line_start FROM symbols ORDER BY RANDOM() LIMIT 10;
+   ```
+   For each, read the source file at `line_start` and verify `name` is present in that
+   line. If >2 out of 10 fail, DO NOT return `INDEXING_COMPLETE` — report a potential
+   tree-sitter extraction corruption and investigate.
+3. **File manifest coverage:** `SELECT COUNT(*) FROM file_manifest WHERE status = 'done'`
+   must be > 0 and match expected scope.
+
+### `HUNTING_BATCH_DONE` — Verification Requirements
+
+1. **Connections written > 0:** At least one connection or resolved hint must have been
+   written during this batch. Verify:
+   ```sql
+   SELECT COUNT(*) FROM connection_hints WHERE resolved = 1;
+   ```
+   If zero connections were found AND zero hints were resolved across ALL assigned files,
+   flag this as suspicious and report to the orchestrator. (It's possible for a batch to
+   find nothing, but it should be rare and worth noting.)
+2. **All assigned files processed:** Every file in `assigned_files` must have been
+   attempted. Check the progress tracking to confirm none were silently skipped.
+
+### `ENRICHED_INDEX_COMPLETE` — Verification Requirements
+
+1. **Zero unresolved dead ends/starts:** This is the HARD gate:
+   ```sql
+   SELECT COUNT(*) FROM connection_hints
+   WHERE resolved = 0 AND hint_type IN ('dead_end', 'dead_start');
+   ```
+   This MUST return 0. If it returns any other value, DO NOT return
+   `ENRICHED_INDEX_COMPLETE`. Report the count and ask the user what to do.
+2. **Enriched call graph has indirect edges:**
+   ```sql
+   SELECT COUNT(*) FROM calls WHERE connection_type != 'direct';
+   ```
+   If this is 0 and connection hints were generated, something went wrong with the
+   merge step.
+3. **Final symbol spot check:** Repeat the 10-symbol source-line verification from
+   `INDEXING_COMPLETE` to confirm the index was not corrupted during enrichment.

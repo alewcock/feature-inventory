@@ -65,97 +65,81 @@ discovered from what the code DOES (outcomes) rather than how it's structured (d
 This produces outcome-focused features that free the re-implementor from replicating
 the legacy architecture.
 
-## Phase Gate Protocol
+## Phase Gate Protocol — MANDATORY HUMAN APPROVAL
 
-**MANDATORY human approval is required between every phase.** The pipeline must NEVER
-silently advance from one phase to the next. Each gate presents quality stats and
-requires explicit user approval via `AskUserQuestion` before proceeding.
+**Every phase transition requires explicit human approval via `AskUserQuestion`.**
+The orchestrator MUST NOT advance to the next phase without the user saying yes.
+The orchestrator MUST NOT write its own justification for skipping a gate.
+The orchestrator MUST NOT rationalize quality issues on behalf of the user.
 
-### Gate 1: After Phase 1 (Enriched Index) — before Phase 2
+### Gate 1: After Phase 1 (Enriched Index) → Before Phase 2 (Graph)
 
-Present to the user:
+Present via `AskUserQuestion`:
 ```
-Phase 1 Complete — Enriched Index Quality Report
-===================================================
-Symbols indexed: {N}
-  Functions: {N}  Classes: {N}  Methods: {N}  Routes: {N}
-  Constants: {N}  Types: {N}  Variables: {N}
-Call resolution rate: {pct}% ({resolved}/{total} calls)
-Dead ends remaining: {N}
-Dead starts remaining: {N}
-Direct call edges: {N}
-Indirect connections found: {N}
-Connection hints resolved: {N}/{total_hints}
+Phase 1 Complete — Enriched Index
+====================================
+Files indexed: {N}
+Symbols: {N}
+Calls: {N} total, {resolved} resolved ({pct}%)
+Connections found: {N}
+Dead ends resolved: {resolved}/{total} ({pct}%)
+Dead starts resolved: {resolved}/{total} ({pct}%)
+Unresolved hints remaining: {N}
 
-Approve advancing to Phase 2 (Graph Construction)? [Y/n]
+Approve advancing to Phase 2 (Graph Construction)?
 ```
 
-Ask via `AskUserQuestion`. If the user says no, STOP the pipeline. Do not proceed.
+### Gate 2: After Phase 2 (Graph) → Before Phase 3 (Annotation)
 
-### Gate 2: After Phase 2 (Graph Built) — before Phase 3
-
-Present to the user:
+Present via `AskUserQuestion`:
 ```
-Phase 2 Complete — Outcome Graph Quality Report
-==================================================
+Phase 2 Complete — Outcome Graph
+====================================
 Entry points: {N}
 Final outcomes: {N}
-Pathways traced: {N}
+Pathways: {N}
 Fan-out points: {N}
-Infrastructure symbols: {N}
-Index coverage: {pct}%
-Validation issues resolved: {N}
 Orphan entry points: {N}
 Unreachable outcomes: {N}
 
-Approve advancing to Phase 3 (Pathway Annotation)? [Y/n]
+Approve advancing to Phase 3 (Pathway Annotation)?
 ```
 
-Ask via `AskUserQuestion`. If the user says no, STOP the pipeline.
+### Gate 3: After Phase 3 (Annotation) → Before Phase 4 (Derivation)
 
-### Gate 3: After Phase 3 (Annotation) — before Phase 4
-
-Present to the user:
+Present via `AskUserQuestion`:
 ```
-Phase 3 Complete — Pathway Annotation Quality Report
-=======================================================
-Pathways annotated: {N}/{total}
-Annotation groups completed: {N}
-Dimensions captured per pathway (avg): {N}
-Pathways with data dimension: {N}
-Pathways with auth dimension: {N}
-Pathways with UI dimension: {N}
-Pathways with side-effect dimension: {N}
+Phase 3 Complete — Pathway Annotations
+==========================================
+Pathways annotated: {N}
+Total annotations: {N}
+By dimension: data={N} auth={N} logic={N} ui={N} config={N} side_effects={N}
+Ambiguities: {N}
 
-Approve advancing to Phase 4 (Feature Derivation)? [Y/n]
+Approve advancing to Phase 4 (Feature Derivation)?
 ```
 
-Ask via `AskUserQuestion`. If the user says no, STOP the pipeline.
+### Gate 4: After Clustering → Before Feature Detail Writing
 
-### Gate 4: After Phase 4 Clustering — before Feature Derivation
-
-Present to the user:
+Present via `AskUserQuestion`:
 ```
-Phase 4 — Clustering Quality Report
-=======================================
-Clusters identified: {N}
-Pathways per cluster (avg): {N}
+Clustering Complete
+======================
+Feature clusters: {N}
 Largest cluster: {name} ({N} pathways)
 Smallest cluster: {name} ({N} pathways)
-Unclustered pathways: {N}
+Empty clusters: {N}
+Pathways covered: {N}/{total} ({pct}%)
 
-Approve proceeding with feature derivation from these clusters? [Y/n]
+Approve proceeding to feature detail generation?
 ```
-
-Ask via `AskUserQuestion`. If the user says no, STOP the pipeline.
 
 ### Gate Enforcement
 
 - Each gate MUST use `AskUserQuestion` — not a rhetorical prompt that auto-continues.
-- If the user rejects a gate, the pipeline stops and the user can investigate, re-run
-  the failed phase, or adjust parameters.
+- The orchestrator MUST NOT write its own override_reason or justification for advancing.
+- If the user says no, STOP. Ask what they want to investigate or fix.
 - Gate stats must be queried from `graph.db`, not estimated or approximated.
-- The orchestrator must NOT catch gate rejections and continue anyway.
 
 ## Important: Context Window Management
 
@@ -356,6 +340,9 @@ Preserved files: everything from previous steps, enriched `graph.db`,
 
 ## Step 4: Build Outcome Graph (Phase 2)
 
+**GATE 1: Before starting Step 4, run the Phase Gate Protocol Gate 1 check.**
+Present enriched index stats via `AskUserQuestion`. Do NOT proceed without user approval.
+
 **Spawn a Task agent with subagent_type `feature-inventory:build-graph`** (same delegation model
 as Step 3 — see "Delegation Model" above for rationale).
 
@@ -383,6 +370,9 @@ Preserved files: everything from previous steps + graph tables in `graph.db`
 
 ## Step 5: Annotate Pathways (Phase 3)
 
+**GATE 2: Before starting Step 5, run the Phase Gate Protocol Gate 2 check.**
+Present graph stats via `AskUserQuestion`. Do NOT proceed without user approval.
+
 **Spawn a Task agent with subagent_type `feature-inventory:annotate-pathways`** (same delegation model).
 
 This step annotates every pathway with dimensional information: data, auth, logic, UI,
@@ -406,6 +396,9 @@ explicit user approval via `AskUserQuestion`. If the user rejects, STOP.
 Preserved files: everything from previous steps + annotations merged in `graph.db`
 
 ## Step 6: Derive Features, Build Index & Validate (Phase 4)
+
+**GATE 3: Before starting Step 6, run the Phase Gate Protocol Gate 3 check.**
+Present annotation stats via `AskUserQuestion`. Do NOT proceed without user approval.
 
 **Spawn a Task agent with subagent_type `feature-inventory:derive-features`** (same delegation model).
 

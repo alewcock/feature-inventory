@@ -218,6 +218,63 @@ Connection hints (for hunter): {N}
   Graph-derived: Dead ends: {N}  Dead starts: {N}
 ```
 
+### 1e: Index Quality Gate — MANDATORY HUMAN APPROVAL
+
+**This gate CANNOT be skipped or self-overridden by the agent.** The agent MUST
+use `AskUserQuestion` and receive explicit human approval before proceeding to
+connection hunting.
+
+Run these diagnostic queries:
+
+```sql
+-- Call resolution rate
+SELECT COUNT(*) as total_calls,
+  SUM(CASE WHEN callee_id IS NOT NULL THEN 1 ELSE 0 END) as resolved,
+  ROUND(100.0 * SUM(CASE WHEN callee_id IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) as pct
+FROM calls;
+
+-- Dead end and dead start counts
+SELECT hint_type, COUNT(*) FROM connection_hints
+WHERE hint_type IN ('dead_end', 'dead_start') GROUP BY hint_type;
+
+-- Spot check: 20 random symbols verified against source lines
+-- For each, read the source file at that line and confirm the name matches
+```
+
+**Perform the spot check.** Pick 20 random symbols. For each one, use the Read
+tool to read the source file at the symbol's line number. Verify the symbol name
+appears on that line. Report results as X/20 matched.
+
+**If ANY spot-check symbol name does NOT match its source line**, the index is
+corrupt. STOP. Report the corruption to the user. Do NOT proceed.
+
+**Present results to the user via `AskUserQuestion`:**
+
+```
+Index Quality Gate
+====================
+Files indexed: {N}
+Symbols: {N}
+Calls: {N} total, {resolved} resolved ({pct}%)
+Dead ends: {N}
+Dead starts: {N}
+Symbol spot check: {X}/20 matched source lines
+
+[If resolution < 50%]: Resolution rate is below 50%. This may indicate
+extraction problems, or it may be expected for codebases with heavy
+external/framework usage. Review the spot check results above.
+
+Approve proceeding to connection hunting?
+```
+
+Options:
+- "Yes, proceed" — continue to Step 2
+- "No, investigate" — stop and let the user examine the index
+
+**DO NOT write your own override_reason. DO NOT rationalize a low resolution
+rate. DO NOT skip this gate. The HUMAN decides whether the index quality is
+acceptable, not the agent.**
+
 ### Context Checkpoint: After Indexing
 
 **MANDATORY — CLEAR STRONGLY RECOMMENDED, but ONLY after confirming all indexing
